@@ -103,8 +103,12 @@ export function parseKubernetesProviderConfig(input: unknown): KubernetesProvide
   return kubernetesProviderConfigSchema.parse(input);
 }
 
+export const SANDBOX_WORKSPACE_DIR = "/workspace";
+
 export interface KubernetesLeaseMetadata {
   namespace: string;
+  /** Working directory of the agent inside the pod; file sync and execution resolve it from the lease. */
+  remoteCwd: string;
   /** Name of the workload resource (Job name for job backend, Sandbox CR name for sandbox-cr backend). */
   jobName: string;
   podName: string | null;

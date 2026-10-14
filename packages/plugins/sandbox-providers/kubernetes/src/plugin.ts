@@ -22,6 +22,7 @@ import {
   kubernetesProviderConfigSchema,
   type KubernetesProviderConfig,
   type KubernetesLeaseMetadata,
+  SANDBOX_WORKSPACE_DIR,
 } from "./types.js";
 import { createKubeConfig, makeKubeClients } from "./kube-client.js";
 import { getAdapterDefaults, buildAdapterEnv, resolveRunAdapterType } from "./adapter-defaults.js";
@@ -453,6 +454,7 @@ const plugin = definePlugin({
 
     const leaseMetadata: KubernetesLeaseMetadata = {
       namespace,
+      remoteCwd: SANDBOX_WORKSPACE_DIR,
       jobName,
       podName,
       secretName,
@@ -528,6 +530,7 @@ const plugin = definePlugin({
 
     const leaseMetadata: KubernetesLeaseMetadata = {
       namespace,
+      remoteCwd: SANDBOX_WORKSPACE_DIR,
       jobName: params.providerLeaseId,
       podName: check.podName,
       secretName,
@@ -563,7 +566,7 @@ const plugin = definePlugin({
     const cwd =
       params.workspace.remotePath && params.workspace.remotePath.trim().length > 0
         ? params.workspace.remotePath.trim()
-        : "/workspace";
+        : SANDBOX_WORKSPACE_DIR;
     return {
       cwd,
       metadata: {
