@@ -180,17 +180,20 @@ export async function selectHeartbeatEnvironment(db: Db, input: HeartbeatEnviron
   const executionForcedToKubernetes =
     isExecutionForcedToKubernetes(executionPolicy);
   let selectedEnvironmentId = environmentResolution.environmentId;
-  const resolvedEnvironment =
-    selectedEnvironmentId && selectedEnvironmentId !== localEnvironment.id
-      ? await environmentsSvc.getById(selectedEnvironmentId)
-      : null;
+  let selectedEnvironmentForConfig =
+    selectedEnvironmentId === localEnvironment.id
+      ? localEnvironment
+      : selectedEnvironmentId
+        ? await environmentsSvc.getById(selectedEnvironmentId)
+        : null;
   const resolvedIsKubernetes =
-    resolvedEnvironment != null &&
+    selectedEnvironmentForConfig != null &&
+    selectedEnvironmentForConfig.status === "active" &&
     isKubernetesSandboxEnvironment({
-      driver: resolvedEnvironment.driver,
+      driver: selectedEnvironmentForConfig.driver,
       provider:
-        typeof resolvedEnvironment.config?.provider === "string"
-          ? resolvedEnvironment.config.provider
+        typeof selectedEnvironmentForConfig.config?.provider === "string"
+          ? selectedEnvironmentForConfig.config.provider
           : null,
     });
   if (executionForcedToKubernetes && !resolvedIsKubernetes) {
@@ -259,13 +262,8 @@ export async function selectHeartbeatEnvironment(db: Db, input: HeartbeatEnviron
       );
     }
     selectedEnvironmentId = kubernetesEnvironment.id;
+    selectedEnvironmentForConfig = kubernetesEnvironment;
   }
-  const selectedEnvironmentForConfig =
-    selectedEnvironmentId === localEnvironment.id
-      ? localEnvironment
-      : selectedEnvironmentId
-        ? await environmentsSvc.getById(selectedEnvironmentId)
-        : null;
   const nativeChatWorkspaceScope = await findNativeChatWorkspaceScope(db, {
     adapterType: agent.adapterType,
     environmentDriver: selectedEnvironmentForConfig?.driver ?? null,

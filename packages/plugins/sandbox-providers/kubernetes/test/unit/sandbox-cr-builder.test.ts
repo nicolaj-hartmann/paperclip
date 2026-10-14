@@ -39,7 +39,7 @@ describe("buildSandboxCrManifest", () => {
     expect(cr.spec.podTemplate.spec.restartPolicy).toBe("Always");
   });
 
-  it("uses sleep-infinity entrypoint via Tini for multi-command exec", () => {
+  it("uses a sleep-infinity entrypoint via Tini that creates the agent-owned repo dir", () => {
     const cr = buildSandboxCrManifest(baseInput);
     const container = cr.spec.podTemplate.spec.containers[0];
     expect(container.command).toEqual([
@@ -47,7 +47,7 @@ describe("buildSandboxCrManifest", () => {
       "--",
       "/bin/sh",
       "-c",
-      "sleep infinity",
+      "mkdir -p /workspace/repo && exec sleep infinity",
     ]);
   });
 

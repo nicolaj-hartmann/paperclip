@@ -145,13 +145,6 @@ function resolveSyncRemoteDir(lease: PluginEnvironmentLease): string {
 // as uid 1000; git refuses such a repository as "dubious ownership" until it is
 // listed as safe. The pod's HOME is a writable emptyDir, so the global config
 // lives there for the life of the sandbox.
-export async function prepareSandboxWorkspace(kc: KubeConfig, namespace: string, podName: string): Promise<void> {
-  const result = await execInPod(kc, namespace, podName, "agent", ["git", "config", "--global", "--add", "safe.directory", "*"]);
-  if (result.exitCode !== 0) {
-    throw new Error(`Could not mark the sandbox workspace safe for git (exit ${result.exitCode}): ${result.stderr}`);
-  }
-}
-
 async function resolveSyncPodExec(
   params:
     | PluginEnvironmentSyncInParams
@@ -189,9 +182,10 @@ async function resolveSyncPodExec(
   // then resolve the pod name — mirrors the onEnvironmentExecute resolution.
   if (!readySandboxesByLease.has(lease.providerLeaseId)) {
     await sandboxCrOrchestrator.waitForCompletion(clients, namespace, lease.providerLeaseId, {
-      timeoutMs,
+      timeoutMs: config.podReadyTimeoutSec * 1000,
       pollMs: 2000,
     });
+    readySandboxesByLease.add(lease.providerLeaseId);
   }
 
   const podName =
@@ -200,11 +194,6 @@ async function resolveSyncPodExec(
       : await sandboxCrOrchestrator.findPod(clients, namespace, lease.providerLeaseId);
   if (!podName) {
     throw new Error("Kubernetes file sync could not resolve the Sandbox pod name.");
-  }
-
-  if (!readySandboxesByLease.has(lease.providerLeaseId)) {
-    await prepareSandboxWorkspace(kc, namespace, podName);
-    readySandboxesByLease.add(lease.providerLeaseId);
   }
 
   // Bind the streaming exec: raw tar bytes move over stdin/stdout straight to and
@@ -904,9 +893,6 @@ const plugin = definePlugin({
       // partial behaviour.
       const execCommand = wrapCommandWithEnv(baseExecCommand, params.env);
 
-      // Remaining share of the caller's budget after the readiness wait (floor
-      // of 5s so an exec attempt is still made when readiness consumed most of
-      // it; the watchdog then bounds it tightly).
       const remainingTimeoutMs = Math.max(
         5_000,
         effectiveTimeoutMs - (Date.now() - executeStartedAt),

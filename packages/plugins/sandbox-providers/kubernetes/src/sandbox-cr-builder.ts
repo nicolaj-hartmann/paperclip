@@ -1,6 +1,7 @@
 import { buildAgentVolumes, buildSidecars } from "./agent-pod.js";
 import { SANDBOX_API_VERSION } from "./sandbox-cr-orchestrator.js";
 import type { SidecarService } from "./types.js";
+import { SANDBOX_WORKSPACE_DIR } from "./types.js";
 
 /**
  * Builds a kubernetes-sigs/agent-sandbox Sandbox CR manifest.
@@ -95,13 +96,15 @@ export function buildSandboxCrManifest(
               imagePullPolicy: "IfNotPresent",
               // sleep infinity keeps the pod running; paperclip-server execs
               // commands into it via Kubernetes exec API. Tini as PID 1 for
-              // proper signal forwarding and zombie reaping.
+              // proper signal forwarding and zombie reaping. The repo dir is
+              // created here so it is owned by the agent uid: the emptyDir
+              // itself is root-owned and git refuses to work in it.
               command: [
                 "/usr/bin/tini",
                 "--",
                 "/bin/sh",
                 "-c",
-                "sleep infinity",
+                `mkdir -p ${SANDBOX_WORKSPACE_DIR} && exec sleep infinity`,
               ],
               // HOME must point at a writable mount; the image's default
                // HOME=/home/node is inside the readOnly root filesystem.

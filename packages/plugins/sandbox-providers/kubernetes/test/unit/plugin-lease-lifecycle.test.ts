@@ -72,7 +72,7 @@ describe("onEnvironmentResumeLease", () => {
     });
 
     expect(lease.providerLeaseId).toBe("pc-abc");
-    expect(lease.metadata).toEqual(expect.objectContaining({ remoteCwd: "/workspace" }));
+    expect(lease.metadata).toEqual(expect.objectContaining({ remoteCwd: "/workspace/repo" }));
     expect(lease.metadata).toEqual(
       expect.objectContaining({
         namespace: "paperclip-acme",
@@ -110,7 +110,7 @@ describe("onEnvironmentResumeLease", () => {
     });
 
     expect(lease.providerLeaseId).toBe("pc-job");
-    expect(lease.metadata).toEqual(expect.objectContaining({ remoteCwd: "/workspace" }));
+    expect(lease.metadata).toEqual(expect.objectContaining({ remoteCwd: "/workspace/repo" }));
     expect(lease.metadata).toEqual(
       expect.objectContaining({
         backend: "job",

@@ -104,7 +104,7 @@ export function parseKubernetesProviderConfig(input: unknown): KubernetesProvide
   return kubernetesProviderConfigSchema.parse(input);
 }
 
-export const SANDBOX_WORKSPACE_DIR = "/workspace";
+export const SANDBOX_WORKSPACE_DIR = "/workspace/repo";
 
 export interface KubernetesLeaseMetadata {
   namespace: string;

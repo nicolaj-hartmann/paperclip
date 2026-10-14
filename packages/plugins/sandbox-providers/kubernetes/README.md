@@ -133,7 +133,7 @@ Every agent pod is:
 
 - non-root (`runAsUser: 1000`, `runAsGroup: 1000`, `runAsNonRoot: true`)
 - drops ALL Linux capabilities, `allowPrivilegeEscalation: false`
-- `readOnlyRootFilesystem: true` with explicit `emptyDir` mounts for `/workspace`, `/home/paperclip`, `/home/paperclip/.cache`, `/tmp`
+- `readOnlyRootFilesystem: true` with explicit `emptyDir` mounts for `/workspace`, `/home/paperclip`, `/home/paperclip/.cache`, `/tmp`; the repo is synced into `/workspace/repo`, which the entrypoint creates so it is owned by the agent uid (the emptyDir mount itself is root-owned and git refuses to operate in it)
 - `seccompProfile: RuntimeDefault`
 - Tini as PID 1 (reaps zombies, forwards signals)
 - `fsGroupChangePolicy: OnRootMismatch` (fast PVC startup; openclaw-operator lesson)
