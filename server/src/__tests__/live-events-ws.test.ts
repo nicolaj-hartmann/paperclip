@@ -1,7 +1,8 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { authUsers, companyMemberships } from "@paperclipai/db";
 import { setupLiveEventsWebSocketServer } from "../realtime/live-events-ws.js";
 import { logger } from "../middleware/logger.js";
 import { idleWorkSnapshot, startTaskDrain, stopTaskDrain } from "../services/task-admission.js";
@@ -218,5 +219,74 @@ describe("setupLiveEventsWebSocketServer", () => {
 
     expect(resolveSessionFromHeaders).toHaveBeenCalledTimes(1);
     expect(socket.endedChunks[0]).toContain("403 Forbidden");
+  });
+
+  describe("trusted proxy browsers", () => {
+    beforeEach(() => {
+      process.env.PAPERCLIP_AUTH_TRUSTED_PROXY_HEADER = "x-forwarded-email";
+    });
+    afterEach(() => {
+      delete process.env.PAPERCLIP_AUTH_TRUSTED_PROXY_HEADER;
+    });
+
+    function proxyDb(memberCompanyIds: string[]) {
+      const rowsFor = (table: unknown) =>
+        table === authUsers
+          ? [{ id: "user-1", name: "Owner", email: "owner@example.com" }]
+          : table === companyMemberships
+            ? memberCompanyIds.map((companyId) => ({ companyId }))
+            : [];
+      return {
+        select: () => ({
+          from: (table: unknown) => {
+            const query = {
+              where: () => query,
+              orderBy: () => query,
+              limit: () => query,
+              then: (resolve: (rows: unknown) => unknown) => Promise.resolve(rowsFor(table)).then(resolve),
+            };
+            return query;
+          },
+        }),
+      };
+    }
+
+    function proxyUpgradeRequest() {
+      return createUpgradeRequest({
+        headers: { "x-forwarded-email": "owner@example.com" },
+        socket: { remoteAddress: "127.0.0.1" } as never,
+      });
+    }
+
+    it("authorizes a member when there is no Better Auth session", async () => {
+      const server = new EventEmitter();
+      const socket = new FakeUpgradeSocket();
+      socket.writable = false;
+      setupLiveEventsWebSocketServer(server as never, proxyDb(["company-1"]) as never, {
+        deploymentMode: "authenticated",
+        resolveSessionFromHeaders: async () => null,
+      });
+
+      server.emit("upgrade", proxyUpgradeRequest(), socket as unknown as Duplex, Buffer.alloc(0));
+      await flushPromises();
+      await flushPromises();
+
+      expect(socket.endedChunks).toEqual([]);
+    });
+
+    it("rejects a user who is not a member of the company", async () => {
+      const server = new EventEmitter();
+      const socket = new FakeUpgradeSocket();
+      setupLiveEventsWebSocketServer(server as never, proxyDb(["company-other"]) as never, {
+        deploymentMode: "authenticated",
+        resolveSessionFromHeaders: async () => null,
+      });
+
+      server.emit("upgrade", proxyUpgradeRequest(), socket as unknown as Duplex, Buffer.alloc(0));
+      await flushPromises();
+      await flushPromises();
+
+      expect(socket.endedChunks[0]).toContain("403 Forbidden");
+    });
   });
 });
