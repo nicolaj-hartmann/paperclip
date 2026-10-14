@@ -72,6 +72,7 @@ export interface KubernetesEnvironmentConfigInput {
   egressAllowCidrs?: string[];
   namespacePrefix?: string;
   imageRegistry?: string;
+  imagePullSecrets?: string[];
   adapterType?: string;
   /**
    * Sandbox lease RPC timeout in milliseconds. Read at lease time by

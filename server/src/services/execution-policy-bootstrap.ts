@@ -125,6 +125,9 @@ export function parseExecutionPolicyBootstrapEnv(
   const egressAllowCidrs = parseList(env.PAPERCLIP_K8S_EGRESS_ALLOW_CIDRS);
   if (egressAllowCidrs) kubernetesConfig.egressAllowCidrs = egressAllowCidrs;
 
+  const imagePullSecrets = parseList(env.PAPERCLIP_K8S_IMAGE_PULL_SECRETS);
+  if (imagePullSecrets) kubernetesConfig.imagePullSecrets = imagePullSecrets;
+
   const adapters = parseAdapterRegistryEnv(env);
   if (adapters) kubernetesConfig.adapters = adapters;
 

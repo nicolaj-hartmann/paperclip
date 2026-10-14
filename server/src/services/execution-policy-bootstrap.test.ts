@@ -100,6 +100,14 @@ describe("parseExecutionPolicyBootstrapEnv", () => {
     expect(parsed?.kubernetesConfig.adapters?.[0].adapterType).toBe("opencode_local");
   });
 
+  it("reads PAPERCLIP_K8S_IMAGE_PULL_SECRETS into kubernetesConfig.imagePullSecrets", () => {
+    const parsed = parseExecutionPolicyBootstrapEnv({
+      PAPERCLIP_EXECUTION_MODE: "kubernetes",
+      PAPERCLIP_K8S_IMAGE_PULL_SECRETS: "reg-code-core-ci, reg-ghcr",
+    });
+    expect(parsed?.kubernetesConfig.imagePullSecrets).toEqual(["reg-code-core-ci", "reg-ghcr"]);
+  });
+
   it("leaves adapters undefined when PAPERCLIP_ADAPTERS is absent", () => {
     const parsed = parseExecutionPolicyBootstrapEnv(env({ PAPERCLIP_EXECUTION_MODE: "kubernetes" }));
     expect(parsed?.kubernetesConfig.adapters).toBeUndefined();
