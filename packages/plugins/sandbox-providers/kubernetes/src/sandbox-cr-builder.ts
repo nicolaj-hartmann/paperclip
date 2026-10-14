@@ -1,3 +1,6 @@
+import { buildAgentVolumes, buildSidecars } from "./agent-pod.js";
+import type { SidecarService } from "./types.js";
+
 /**
  * Builds a kubernetes-sigs/agent-sandbox Sandbox CR manifest.
  *
@@ -30,6 +33,7 @@ export interface BuildSandboxCrManifestInput {
   };
   runtimeClassName?: string;
   imagePullSecrets?: string[];
+  services?: SidecarService[];
 }
 
 export function buildSandboxCrManifest(
@@ -39,6 +43,7 @@ export function buildSandboxCrManifest(
     ...input.labels,
     "paperclip.io/role": "agent",
   };
+  const services = input.services ?? [];
   return {
     apiVersion: "agents.x-k8s.io/v1alpha1",
     kind: "Sandbox",
@@ -81,6 +86,7 @@ export function buildSandboxCrManifest(
             fsGroupChangePolicy: "OnRootMismatch",
             seccompProfile: { type: "RuntimeDefault" },
           },
+          ...(services.length > 0 ? { initContainers: buildSidecars(services) } : {}),
           containers: [
             {
               name: "agent",
@@ -128,12 +134,7 @@ export function buildSandboxCrManifest(
               ],
             },
           ],
-          volumes: [
-            { name: "workspace", emptyDir: { sizeLimit: "8Gi" } },
-            { name: "home", emptyDir: { sizeLimit: "1Gi" } },
-            { name: "cache", emptyDir: { sizeLimit: "1Gi" } },
-            { name: "tmp", emptyDir: { sizeLimit: "2Gi" } },
-          ],
+          volumes: buildAgentVolumes(services),
         },
       },
     },

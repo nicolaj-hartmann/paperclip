@@ -382,6 +382,7 @@ const plugin = definePlugin({
           resources: config.defaultResources ?? {},
           runtimeClassName: config.runtimeClassName,
           imagePullSecrets: config.imagePullSecrets,
+          services: config.services,
         })
       : buildJobManifest({
           namespace,

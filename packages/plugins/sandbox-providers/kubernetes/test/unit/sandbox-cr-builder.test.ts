@@ -134,4 +134,21 @@ describe("buildSandboxCrManifest", () => {
     const cr = buildSandboxCrManifest(baseInput);
     expect(cr.spec.podTemplate.spec.imagePullSecrets).toBeUndefined();
   });
+
+  it("renders services as native sidecars that gate the agent container", () => {
+    const manifest = buildSandboxCrManifest({
+      ...baseInput,
+      services: [{ name: "postgres", image: "postgres:18", env: { PGPORT: "5433" }, volumes: ["/var/lib/postgresql/data"], readyCommand: ["pg_isready", "-p", "5433"], user: 999 }],
+    });
+    const podSpec = (manifest.spec as any).podTemplate.spec;
+    expect(podSpec.initContainers).toHaveLength(1);
+    expect(podSpec.initContainers[0]).toMatchObject({
+      name: "postgres",
+      restartPolicy: "Always",
+      env: [{ name: "PGPORT", value: "5433" }],
+      startupProbe: { exec: { command: ["pg_isready", "-p", "5433"] } },
+      securityContext: { runAsUser: 999 },
+    });
+    expect(podSpec.volumes).toContainEqual({ name: "svc-postgres-0", emptyDir: { sizeLimit: "4Gi" } });
+  });
 });

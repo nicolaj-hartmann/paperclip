@@ -142,5 +142,11 @@ describe("buildJobManifest", () => {
       const job = buildJobManifest(baseInput);
       expect(job.spec.template.spec.initContainers).toBeUndefined();
     });
+
+    it("gives the home and tmp mounts room for package caches", () => {
+      const volumes = buildJobManifest(baseInput).spec.template.spec.volumes;
+      expect(volumes).toContainEqual({ name: "home", emptyDir: { sizeLimit: "4Gi" } });
+      expect(volumes).toContainEqual({ name: "tmp", emptyDir: { sizeLimit: "4Gi" } });
+    });
   });
 });
