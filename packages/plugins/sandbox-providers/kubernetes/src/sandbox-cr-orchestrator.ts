@@ -1,6 +1,6 @@
 /**
  * SandboxOrchestrator implementation backed by the kubernetes-sigs/agent-sandbox
- * Sandbox CRD (agents.x-k8s.io/v1alpha1).
+ * Sandbox CRD (agents.x-k8s.io/v1beta1).
  *
  * The Sandbox CR creates a long-lived pod that paperclip-server can exec into
  * for multi-command adapter-install workflows — the key architectural win over
@@ -24,8 +24,9 @@
 import type { KubeClients } from "./kube-client.js";
 import type { SandboxOrchestrator, SandboxStatus } from "./sandbox-orchestrator.js";
 
-const SANDBOX_GROUP = "agents.x-k8s.io";
-const SANDBOX_VERSION = "v1alpha1";
+export const SANDBOX_GROUP = "agents.x-k8s.io";
+export const SANDBOX_VERSION = "v1beta1";
+export const SANDBOX_API_VERSION = `${SANDBOX_GROUP}/${SANDBOX_VERSION}`;
 const SANDBOX_PLURAL = "sandboxes";
 
 export class SandboxCrTimeoutError extends Error {
@@ -45,11 +46,19 @@ function sleep(ms: number): Promise<void> {
  * Map a Sandbox CR status.phase value to our SandboxStatus shape.
  * Sandbox phases: Pending | Ready | Terminating | Failed
  */
+function phaseFromConditions(status: Record<string, unknown>): string {
+  const conditions = Array.isArray(status.conditions) ? (status.conditions as Array<Record<string, unknown>>) : [];
+  const isTrue = (type: string) => conditions.some((c) => c.type === type && c.status === "True");
+  if (isTrue("Ready")) return "Ready";
+  if (isTrue("Failed")) return "Failed";
+  return "Pending";
+}
+
 function mapSandboxPhase(
   cr: Record<string, unknown>,
 ): SandboxStatus {
   const status = (cr.status as Record<string, unknown>) ?? {};
-  const phase = (status.phase as string) ?? "Pending";
+  const phase = (status.phase as string) ?? phaseFromConditions(status);
 
   switch (phase) {
     case "Ready":
@@ -266,7 +275,7 @@ export async function waitForSandboxReady(
     }) as Record<string, unknown>;
 
     const status = (cr.status as Record<string, unknown>) ?? {};
-    // agent-sandbox v1alpha1 uses status.conditions[type=Ready,status=True],
+    // agent-sandbox uses status.conditions[type=Ready,status=True],
     // not status.phase. Fall back to phase for forward-compat.
     const conditions = Array.isArray(status.conditions) ? status.conditions as Array<Record<string, unknown>> : [];
     const readyCondition = conditions.find((c) => c.type === "Ready");

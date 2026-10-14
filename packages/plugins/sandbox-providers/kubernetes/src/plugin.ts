@@ -35,6 +35,7 @@ import { jobOrchestrator, JobTimeoutError } from "./job-orchestrator.js";
 import {
   sandboxCrOrchestrator,
   SandboxCrTimeoutError,
+  SANDBOX_API_VERSION,
 } from "./sandbox-cr-orchestrator.js";
 import { execInPod, execInPodStreaming, wrapCommandWithEnv } from "./pod-exec.js";
 import { performSyncIn, performSyncOut, type PodStreamExec } from "./file-sync.js";
@@ -410,7 +411,7 @@ const plugin = definePlugin({
         runId: params.runId,
         workloadName: jobName,
         ownerReference: {
-          apiVersion: isSandboxCrBackend ? "agents.x-k8s.io/v1alpha1" : "batch/v1",
+          apiVersion: isSandboxCrBackend ? SANDBOX_API_VERSION : "batch/v1",
           kind: isSandboxCrBackend ? "Sandbox" : "Job",
           name: jobName,
           uid: ownerUid,
@@ -441,7 +442,7 @@ const plugin = definePlugin({
       secretName,
       runId: params.runId,
       ownerKind: isSandboxCrBackend ? "Sandbox" : "Job",
-      ownerApiVersion: isSandboxCrBackend ? "agents.x-k8s.io/v1alpha1" : "batch/v1",
+      ownerApiVersion: isSandboxCrBackend ? SANDBOX_API_VERSION : "batch/v1",
       ownerName: jobName,
       ownerUid,
       bootstrapToken,

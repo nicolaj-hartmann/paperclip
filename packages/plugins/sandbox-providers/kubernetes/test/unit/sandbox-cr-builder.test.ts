@@ -19,7 +19,7 @@ const baseInput = {
 describe("buildSandboxCrManifest", () => {
   it("returns a Sandbox CR with the correct apiVersion and kind", () => {
     const cr = buildSandboxCrManifest(baseInput);
-    expect(cr.apiVersion).toBe("agents.x-k8s.io/v1alpha1");
+    expect(cr.apiVersion).toBe("agents.x-k8s.io/v1beta1");
     expect(cr.kind).toBe("Sandbox");
   });
 

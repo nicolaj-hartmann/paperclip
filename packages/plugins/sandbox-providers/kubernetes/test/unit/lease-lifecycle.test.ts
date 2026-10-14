@@ -6,7 +6,7 @@ import {
 } from "../../src/lease-lifecycle.js";
 
 const SANDBOX_GROUP = "agents.x-k8s.io";
-const SANDBOX_VERSION = "v1alpha1";
+const SANDBOX_VERSION = "v1beta1";
 const SANDBOX_PLURAL = "sandboxes";
 
 function notFound(): Error {

@@ -1,4 +1,5 @@
 import { buildAgentVolumes, buildSidecars } from "./agent-pod.js";
+import { SANDBOX_API_VERSION } from "./sandbox-cr-orchestrator.js";
 import type { SidecarService } from "./types.js";
 
 /**
@@ -45,7 +46,7 @@ export function buildSandboxCrManifest(
   };
   const services = input.services ?? [];
   return {
-    apiVersion: "agents.x-k8s.io/v1alpha1",
+    apiVersion: SANDBOX_API_VERSION,
     kind: "Sandbox",
     metadata: {
       name: input.sandboxName,
