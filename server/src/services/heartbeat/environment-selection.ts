@@ -4,7 +4,7 @@ import type { ExecutionWorkspace, IssueExecutionWorkspaceSettings, ProjectExecut
 import { parseObject } from "../../adapters/utils.js";
 import { logger } from "../../middleware/logger.js";
 import { parseNativeExecutionInput } from "../../vendor/paperclip-runner/index.js";
-import { isExecutionForcedToKubernetes } from "../execution-allowlist.js";
+import { isExecutionForcedToKubernetes, isKubernetesSandboxEnvironment } from "../execution-allowlist.js";
 import { parseExecutionPolicyBootstrapEnv } from "../execution-policy-bootstrap.js";
 import {
   parseIssueExecutionWorkspaceSettings,
@@ -180,7 +180,20 @@ export async function selectHeartbeatEnvironment(db: Db, input: HeartbeatEnviron
   const executionForcedToKubernetes =
     isExecutionForcedToKubernetes(executionPolicy);
   let selectedEnvironmentId = environmentResolution.environmentId;
-  if (executionForcedToKubernetes) {
+  const resolvedEnvironment =
+    selectedEnvironmentId && selectedEnvironmentId !== localEnvironment.id
+      ? await environmentsSvc.getById(selectedEnvironmentId)
+      : null;
+  const resolvedIsKubernetes =
+    resolvedEnvironment != null &&
+    isKubernetesSandboxEnvironment({
+      driver: resolvedEnvironment.driver,
+      provider:
+        typeof resolvedEnvironment.config?.provider === "string"
+          ? resolvedEnvironment.config.provider
+          : null,
+    });
+  if (executionForcedToKubernetes && !resolvedIsKubernetes) {
     let kubernetesEnvironment =
       await environmentsSvc.findKubernetesEnvironment(agent.companyId);
     if (!kubernetesEnvironment) {

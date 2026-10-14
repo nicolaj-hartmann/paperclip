@@ -121,6 +121,24 @@ describe.skipIf(!support.supported)("heartbeat environment selection boundary", 
     expect(result.useIsolatedTaskDirectory).toBe(true);
   });
 
+  it.each([
+    ["kubernetes", true],
+    ["fake", false],
+  ] as const)("under forced Kubernetes execution keeps the agent's %s environment: %s", async (provider, kept) => {
+    const { input } = await fixture();
+    const [managed] = await db.insert(environments).values({ name: `Managed ${provider}`, driver: "sandbox", status: "active", config: { provider: "kubernetes" }, metadata: { managedKubernetesSandbox: true } }).returning();
+    const [own] = await db.insert(environments).values({ name: `Own ${provider}`, driver: "sandbox", status: "active", config: { provider } }).returning();
+    await db.update(agents).set({ defaultEnvironmentId: own.id }).where(eq(agents.id, input.agent.id));
+    input.agent.defaultEnvironmentId = own.id;
+    await instanceSettingsService(db).updateGeneral({ executionMode: "kubernetes" });
+    try {
+      const result = await selectHeartbeatEnvironment(db, input);
+      expect(result.selectedEnvironmentForConfig?.id).toBe(kept ? own.id : managed.id);
+    } finally {
+      await instanceSettingsService(db).updateGeneral({ executionMode: "any" });
+    }
+  });
+
   it("returns the task-owned local chat root before workspace realization", async () => {
     const { input, issue } = await fixture();
     await db.update(issues).set({ originKind: "chat_channel", projectId: null }).where(eq(issues.id, issue.id));

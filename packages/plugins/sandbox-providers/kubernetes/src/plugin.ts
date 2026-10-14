@@ -732,18 +732,17 @@ const plugin = definePlugin({
       // declaration for rationale.
       const podAlreadyKnownReady = readySandboxesByLease.has(lease.providerLeaseId);
 
-      // The caller's timeout is a budget for the WHOLE execute call: readiness
-      // wait + exec must share it, or the first exec on a fresh lease could
-      // block for up to twice the requested timeout.
-      const executeStartedAt = Date.now();
-
+      // Readiness (scheduling + image pull) has its own budget; the caller's
+      // timeout only covers the exec itself, so a short probe on a fresh
+      // lease is not cut off by a cold image pull.
       if (!podAlreadyKnownReady) {
+        const readyTimeoutMs = config.podReadyTimeoutSec * 1000;
         try {
           await sandboxCrOrchestrator.waitForCompletion(
             clients,
             namespace,
             lease.providerLeaseId,
-            { timeoutMs: effectiveTimeoutMs, pollMs: 2000 },
+            { timeoutMs: readyTimeoutMs, pollMs: 2000 },
           );
           readySandboxesByLease.add(lease.providerLeaseId);
         } catch (err) {
@@ -752,7 +751,7 @@ const plugin = definePlugin({
               exitCode: null,
               timedOut: true,
               stdout: "",
-              stderr: `Sandbox pod did not become Ready within ${effectiveTimeoutMs}ms`,
+              stderr: `Sandbox pod did not become Ready within ${readyTimeoutMs}ms`,
               metadata: {
                 provider: "kubernetes",
                 backend: "sandbox-cr",
@@ -764,6 +763,8 @@ const plugin = definePlugin({
           throw err;
         }
       }
+
+      const executeStartedAt = Date.now();
 
       // Resolve pod name (may now be populated in Sandbox status).
       if (!podName) {
