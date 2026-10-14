@@ -1,3 +1,5 @@
+import type { SidecarService } from "./types.js";
+
 export interface BuildJobManifestInput {
   namespace: string;
   jobName: string;
@@ -14,6 +16,35 @@ export interface BuildJobManifestInput {
   activeDeadlineSec: number;
   ttlSecondsAfterFinished: number;
   imagePullSecrets?: string[];
+  services?: SidecarService[];
+}
+
+function serviceVolumeName(service: SidecarService, index: number): string {
+  return `svc-${service.name}-${index}`;
+}
+
+function buildSidecar(service: SidecarService): Record<string, unknown> {
+  const user = service.user ?? 1000;
+  return {
+    name: service.name,
+    image: service.image,
+    imagePullPolicy: "IfNotPresent",
+    restartPolicy: "Always",
+    ...(service.command ? { command: service.command } : {}),
+    ...(service.args ? { args: service.args } : {}),
+    env: Object.entries(service.env).map(([name, value]) => ({ name, value })),
+    ...(service.readyCommand
+      ? { startupProbe: { exec: { command: service.readyCommand }, periodSeconds: 2, failureThreshold: 90 } }
+      : {}),
+    securityContext: {
+      runAsNonRoot: true,
+      runAsUser: user,
+      runAsGroup: user,
+      allowPrivilegeEscalation: false,
+      capabilities: { drop: ["ALL"] },
+    },
+    volumeMounts: service.volumes.map((mountPath, index) => ({ name: serviceVolumeName(service, index), mountPath })),
+  };
 }
 
 export function buildJobManifest(input: BuildJobManifestInput): Record<string, unknown> {
@@ -21,6 +52,7 @@ export function buildJobManifest(input: BuildJobManifestInput): Record<string, u
     ...input.labels,
     "paperclip.io/role": "agent",
   };
+  const services = input.services ?? [];
   return {
     apiVersion: "batch/v1",
     kind: "Job",
@@ -54,6 +86,7 @@ export function buildJobManifest(input: BuildJobManifestInput): Record<string, u
             fsGroupChangePolicy: "OnRootMismatch",
             seccompProfile: { type: "RuntimeDefault" },
           },
+          ...(services.length > 0 ? { initContainers: services.map(buildSidecar) } : {}),
           containers: [
             {
               name: "agent",
@@ -91,6 +124,9 @@ export function buildJobManifest(input: BuildJobManifestInput): Record<string, u
             { name: "home", emptyDir: { sizeLimit: "1Gi" } },
             { name: "cache", emptyDir: { sizeLimit: "1Gi" } },
             { name: "tmp", emptyDir: { sizeLimit: "2Gi" } },
+            ...services.flatMap((service) =>
+              service.volumes.map((_, index) => ({ name: serviceVolumeName(service, index), emptyDir: { sizeLimit: "4Gi" } })),
+            ),
           ],
         },
       },

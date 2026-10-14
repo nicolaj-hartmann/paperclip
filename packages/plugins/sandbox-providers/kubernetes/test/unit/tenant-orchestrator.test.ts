@@ -16,6 +16,11 @@ function makeMockClients() {
       createNamespace: track("Namespace"),
       readNamespacedServiceAccount: vi.fn().mockRejectedValue({ code: 404 }),
       createNamespacedServiceAccount: track("ServiceAccount"),
+      readNamespacedSecret: vi.fn(async ({ namespace }: { namespace: string }) => {
+        if (namespace !== "paperclip") throw { code: 404 };
+        return { type: "kubernetes.io/dockerconfigjson", data: { ".dockerconfigjson": "e30=" } };
+      }),
+      createNamespacedSecret: track("Secret"),
       readNamespacedResourceQuota: vi.fn().mockRejectedValue({ code: 404 }),
       createNamespacedResourceQuota: track("ResourceQuota"),
       readNamespacedLimitRange: vi.fn().mockRejectedValue({ code: 404 }),
@@ -49,7 +54,28 @@ describe("ensureTenant", () => {
     egressAllowFqdns: ["api.anthropic.com"],
     egressAllowCidrs: [] as string[],
     resourceQuota: { pods: "20", requestsCpu: "5", requestsMemory: "20Gi", limitsCpu: "20", limitsMemory: "80Gi" },
+    imagePullSecrets: [] as string[],
   };
+
+  it("copies each image pull secret from the server namespace into a fresh tenant namespace", async () => {
+    const clients = makeMockClients();
+    await ensureTenant(clients as never, { ...baseInput, imagePullSecrets: ["reg-code-core-ci"] });
+    const created = clients.calls.filter((c) => c.kind === "Secret");
+    expect(created).toHaveLength(1);
+    expect(created[0].namespace).toBe("paperclip-acme");
+    expect(created[0].body).toMatchObject({
+      type: "kubernetes.io/dockerconfigjson",
+      data: { ".dockerconfigjson": "e30=" },
+      metadata: { name: "reg-code-core-ci", namespace: "paperclip-acme" },
+    });
+  });
+
+  it("leaves an image pull secret alone when the tenant namespace already has it", async () => {
+    const clients = makeMockClients();
+    clients.core.readNamespacedSecret = vi.fn().mockResolvedValue({ type: "Opaque", data: {} });
+    await ensureTenant(clients as never, { ...baseInput, imagePullSecrets: ["reg-code-core-ci"] });
+    expect(clients.calls.filter((c) => c.kind === "Secret")).toHaveLength(0);
+  });
 
   it("creates all required resources in the correct order on a fresh tenant", async () => {
     const clients = makeMockClients();

@@ -36,4 +36,21 @@ describe("kubernetesProviderConfigSchema", () => {
       parseKubernetesProviderConfig({ inCluster: true, egressAllowCidrs: ["not-a-cidr"] }),
     ).toThrow(/CIDR/i);
   });
+
+  it("accepts compose-style services and defaults their env and volumes", () => {
+    const parsed = kubernetesProviderConfigSchema.parse({
+      inCluster: true,
+      services: [{ name: "postgres", image: "postgres:18", readyCommand: ["pg_isready"] }],
+    });
+    expect(parsed.services).toEqual([
+      { name: "postgres", image: "postgres:18", env: {}, volumes: [], readyCommand: ["pg_isready"] },
+    ]);
+  });
+
+  it("defaults services to an empty list and rejects a service name that is not a DNS label", () => {
+    expect(kubernetesProviderConfigSchema.parse({ inCluster: true }).services).toEqual([]);
+    expect(() =>
+      kubernetesProviderConfigSchema.parse({ inCluster: true, services: [{ name: "Post_gres", image: "postgres:18" }] }),
+    ).toThrow();
+  });
 });

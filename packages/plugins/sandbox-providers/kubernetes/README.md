@@ -178,3 +178,34 @@ To run the kind-cluster integration test (requires `kubectl --context kind-paper
 ```bash
 RUN_K8S_INTEGRATION_TESTS=1 pnpm test test/integration/end-to-end-run.test.ts
 ```
+
+## Services (compose-style sidecars)
+
+An environment can declare services that run beside the agent in every Job pod, on `localhost`,
+much like a `docker-compose.yml`. Each becomes a native sidecar; when `readyCommand` is set the
+agent container only starts once it succeeds. Services are ephemeral per run.
+
+```json
+{
+  "services": [
+    {
+      "name": "postgres",
+      "image": "postgres:18",
+      "env": { "POSTGRES_PASSWORD": "postgres", "PGDATA": "/var/lib/postgresql/data/pgdata" },
+      "volumes": ["/var/lib/postgresql/data"],
+      "readyCommand": ["pg_isready", "-U", "postgres"],
+      "user": 999
+    }
+  ]
+}
+```
+
+`user` is the uid the service runs as (default 1000, the sandbox user); `volumes` are writable
+emptyDir mounts. The pod's fsGroup (1000) is added as a supplementary group, so a service running
+as another uid can create its data directory inside a mounted volume.
+
+## Image pull secrets
+
+`imagePullSecrets` names Secrets in the server's namespace; each is copied into a tenant namespace
+when that namespace is first provisioned, so private registries work for both the agent image and
+the services.

@@ -92,4 +92,55 @@ describe("buildJobManifest", () => {
     expect(job.spec.template.metadata.labels["paperclip.io/run-id"]).toBe("r1");
     expect(job.spec.template.metadata.labels["paperclip.io/role"]).toBe("agent");
   });
+
+  describe("services", () => {
+    const postgres = {
+      name: "postgres",
+      image: "postgres:18",
+      env: { POSTGRES_PASSWORD: "postgres", PGDATA: "/var/lib/postgresql/data/pgdata" },
+      volumes: ["/var/lib/postgresql/data"],
+      readyCommand: ["pg_isready", "-U", "postgres"],
+      user: 999,
+    };
+
+    it("renders each service as a native sidecar that must be ready before the agent starts", () => {
+      const job = buildJobManifest({ ...baseInput, services: [postgres] });
+      const podSpec = job.spec.template.spec;
+      expect(podSpec.initContainers).toHaveLength(1);
+      const sidecar = podSpec.initContainers[0];
+      expect(sidecar.name).toBe("postgres");
+      expect(sidecar.image).toBe("postgres:18");
+      expect(sidecar.restartPolicy).toBe("Always");
+      expect(sidecar.env).toEqual([
+        { name: "POSTGRES_PASSWORD", value: "postgres" },
+        { name: "PGDATA", value: "/var/lib/postgresql/data/pgdata" },
+      ]);
+      expect(sidecar.startupProbe.exec.command).toEqual(["pg_isready", "-U", "postgres"]);
+      expect(sidecar.volumeMounts).toEqual([{ name: "svc-postgres-0", mountPath: "/var/lib/postgresql/data" }]);
+      expect(podSpec.volumes).toContainEqual({ name: "svc-postgres-0", emptyDir: { sizeLimit: "4Gi" } });
+      expect(sidecar.securityContext).toMatchObject({
+        runAsNonRoot: true,
+        runAsUser: 999,
+        runAsGroup: 999,
+        allowPrivilegeEscalation: false,
+        capabilities: { drop: ["ALL"] },
+      });
+    });
+
+    it("runs a service as the sandbox user and without a startup probe when nothing else is declared", () => {
+      const job = buildJobManifest({
+        ...baseInput,
+        services: [{ name: "redis", image: "redis:7", env: {}, volumes: [] }],
+      });
+      const sidecar = job.spec.template.spec.initContainers[0];
+      expect(sidecar.securityContext.runAsUser).toBe(1000);
+      expect(sidecar.startupProbe).toBeUndefined();
+      expect(sidecar.volumeMounts).toEqual([]);
+    });
+
+    it("declares no initContainers when the environment has no services", () => {
+      const job = buildJobManifest(baseInput);
+      expect(job.spec.template.spec.initContainers).toBeUndefined();
+    });
+  });
 });

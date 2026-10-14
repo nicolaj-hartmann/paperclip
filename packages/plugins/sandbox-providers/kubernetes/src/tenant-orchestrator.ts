@@ -17,6 +17,7 @@ export interface EnsureTenantInput {
     limitsCpu: string;
     limitsMemory: string;
   };
+  imagePullSecrets: string[];
 }
 
 const SERVICE_ACCOUNT_NAME = "paperclip-tenant-sa";
@@ -44,6 +45,7 @@ const LIMIT_RANGE_NAME = "paperclip-limits";
 export async function ensureTenant(clients: KubeClients, input: EnsureTenantInput): Promise<void> {
   await ensureNamespace(clients, input);
   await ensureServiceAccount(clients, input);
+  await ensureImagePullSecrets(clients, input);
   await ensureRole(clients, input);
   await ensureRoleBinding(clients, input);
   await ensureResourceQuota(clients, input);
@@ -100,6 +102,34 @@ async function ensureServiceAccount(clients: KubeClients, input: EnsureTenantInp
         },
       }),
   );
+}
+
+async function ensureImagePullSecrets(clients: KubeClients, input: EnsureTenantInput): Promise<void> {
+  for (const name of input.imagePullSecrets) {
+    try {
+      await clients.core.readNamespacedSecret({ name, namespace: input.namespace });
+      continue;
+    } catch (err) {
+      if (!isNotFound(err)) throw err;
+    }
+    const source = await clients.core.readNamespacedSecret({ name, namespace: input.paperclipServerNamespace });
+    await createIgnoringAlreadyExists(
+      clients.core.createNamespacedSecret({
+        namespace: input.namespace,
+        body: {
+          apiVersion: "v1",
+          kind: "Secret",
+          type: source.type,
+          data: source.data,
+          metadata: {
+            name,
+            namespace: input.namespace,
+            labels: { "paperclip.io/managed-by": "paperclip-k8s-plugin" },
+          },
+        },
+      }),
+    );
+  }
 }
 
 async function ensureRole(clients: KubeClients, input: EnsureTenantInput): Promise<void> {

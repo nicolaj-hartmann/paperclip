@@ -54,6 +54,28 @@ export const kubernetesProviderConfigSchema = z
     adapters: adapterRegistrySchema.optional(),
 
     /**
+     * Compose-style services that run beside the agent in every Job pod and are
+     * reachable on localhost. Each one is a native sidecar the agent container
+     * waits for (readyCommand drives its startup probe).
+     */
+    services: z
+      .array(
+        z
+          .object({
+            name: z.string().regex(/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/),
+            image: z.string().min(1),
+            env: z.record(z.string()).default({}),
+            command: z.array(z.string()).optional(),
+            args: z.array(z.string()).optional(),
+            volumes: z.array(z.string().startsWith("/")).default([]),
+            readyCommand: z.array(z.string()).min(1).optional(),
+            user: z.number().int().positive().optional(),
+          })
+          .strict(),
+      )
+      .default([]),
+
+    /**
      * The sandbox backend to use.
      *
      * - `"sandbox-cr"` (default, alpha) — uses the kubernetes-sigs/agent-sandbox
@@ -106,3 +128,5 @@ export interface KubernetesLeaseMetadata {
    */
   nativeFileSyncUnsupported?: boolean;
 }
+
+export type SidecarService = z.infer<typeof kubernetesProviderConfigSchema>["services"][number];

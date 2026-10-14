@@ -345,6 +345,7 @@ const plugin = definePlugin({
       egressAllowFqdns: [...adapterDefaults.allowFqdns, ...config.egressAllowFqdns],
       egressAllowCidrs: config.egressAllowCidrs,
       resourceQuota: DEFAULT_RESOURCE_QUOTA,
+      imagePullSecrets: config.imagePullSecrets,
     });
 
     const jobName = `pc-${newRunUlidDns()}`;
@@ -395,6 +396,7 @@ const plugin = definePlugin({
           activeDeadlineSec: config.podActivityDeadlineSec,
           ttlSecondsAfterFinished: config.jobTtlSecondsAfterFinished,
           imagePullSecrets: config.imagePullSecrets,
+          services: config.services,
         });
 
     const { uid: ownerUid } = await orchestrator.claim(clients, namespace, manifest);
