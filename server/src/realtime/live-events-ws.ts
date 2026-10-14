@@ -8,7 +8,7 @@ import type { Db } from "@paperclipai/db";
 import { agentApiKeys, companyMemberships, instanceUserRoles, heartbeatRuns, issues, projects } from "@paperclipai/db";
 import type { DeploymentMode, LiveEvent } from "@paperclipai/shared";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
-import { cloudActorHeaderSourceFromHeaders, resolveTrustedProxyUser } from "../middleware/auth.js";
+import { cloudActorHeaderSourceFromHeaders, loadBoardUserAccess, resolveTrustedProxyUser } from "../middleware/auth.js";
 import { logger } from "../middleware/logger.js";
 import { activityToastIdentity } from "./activity-toast-identity.js";
 import { taskToastEligible } from "./task-toast-eligibility.js";
@@ -188,32 +188,14 @@ async function authorizeUpgrade(
     }))?.id;
     if (!userId) return null;
 
-    const [roleRow, memberships] = await Promise.all([
-      db
-        .select({ id: instanceUserRoles.id })
-        .from(instanceUserRoles)
-        .where(and(eq(instanceUserRoles.userId, userId), eq(instanceUserRoles.role, "instance_admin")))
-        .then((rows) => rows[0] ?? null),
-      db
-        .select({ companyId: companyMemberships.companyId })
-        .from(companyMemberships)
-        .where(
-          and(
-            eq(companyMemberships.principalType, "user"),
-            eq(companyMemberships.principalId, userId),
-            eq(companyMemberships.status, "active"),
-          ),
-        ),
-    ]);
-
-    const hasCompanyMembership = memberships.some((row) => row.companyId === companyId);
-    if (!roleRow && !hasCompanyMembership) return null;
+    const access = await loadBoardUserAccess(db, userId);
+    if (!access.isInstanceAdmin && !access.companyIds.includes(companyId)) return null;
 
     return {
       companyId,
       actorType: "board",
       actorId: userId,
-      actor: { type: "board", userId, source: "session", companyIds: memberships.map(m => m.companyId) },
+      actor: { type: "board", userId, source: "session", companyIds: access.companyIds },
     };
   }
 
