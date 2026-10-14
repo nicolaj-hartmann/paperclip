@@ -1,0 +1,44 @@
+name: Levior image
+
+on:
+  push:
+    branches: [levior]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: levior-image
+  cancel-in-progress: false
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: sha
+        run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: cloud
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: ghcr.io/${{ github.repository_owner }}/paperclip:sha-${{ steps.sha.outputs.short }}
+          build-args: |
+            CLOUD_BUNDLED_PLUGINS=kubernetes
+            CLOUD_BUNDLED_SERVER_DEPS=@sentry/node
+            PAPERCLIP_BUILD_COMMIT=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
