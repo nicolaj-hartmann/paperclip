@@ -161,6 +161,72 @@ async function loadActiveUserCompanyMemberships(db: Db, userId: string) {
     );
 }
 
+async function boardSessionActor(
+  db: Db,
+  user: { id: string; name: string | null; email: string | null },
+  sessionId: string,
+  runId: string | undefined,
+): Promise<Express.Request["actor"]> {
+  const [roleRow, memberships] = await Promise.all([
+    db
+      .select({ id: instanceUserRoles.id })
+      .from(instanceUserRoles)
+      .where(and(eq(instanceUserRoles.userId, user.id), eq(instanceUserRoles.role, "instance_admin")))
+      .then((rows) => rows[0] ?? null),
+    loadActiveUserCompanyMemberships(db, user.id),
+  ]);
+  return {
+    type: "board",
+    userId: user.id,
+    sessionId,
+    userName: user.name,
+    userEmail: user.email,
+    companyIds: memberships.map((row) => row.companyId),
+    memberships,
+    isInstanceAdmin: Boolean(roleRow),
+    runId,
+    source: "session",
+  };
+}
+
+const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+
+export interface TrustedProxyRequest {
+  socket: { remoteAddress?: string };
+  header(name: string): string | undefined;
+}
+
+export async function resolveTrustedProxyUser(
+  db: Db,
+  req: TrustedProxyRequest,
+): Promise<{ id: string; name: string; email: string } | null> {
+  const headerName = process.env.PAPERCLIP_AUTH_TRUSTED_PROXY_HEADER?.trim();
+  if (!headerName || !LOOPBACK_ADDRESSES.has(req.socket.remoteAddress ?? "")) return null;
+  const email = req.header(headerName)?.trim().toLowerCase();
+  if (!email) return null;
+
+  const existing = await db
+    .select({ id: authUsers.id, name: authUsers.name, email: authUsers.email })
+    .from(authUsers)
+    .where(eq(authUsers.email, email))
+    .orderBy(authUsers.createdAt)
+    .limit(1)
+    .then((rows) => rows[0]);
+  if (existing) return existing;
+
+  const user = {
+    id: `trusted-proxy:${createHash("sha256").update(email).digest("hex").slice(0, 32)}`,
+    name: email,
+    email,
+  };
+  const now = new Date();
+  await db
+    .insert(authUsers)
+    .values({ ...user, emailVerified: true, image: null, createdAt: now, updatedAt: now })
+    .onConflictDoNothing();
+  return user;
+}
+
 async function auditAgentJwtRunHeaderMismatch(
   db: Db,
   input: { companyId: string; agentId: string; claimRunId: string; headerRunId: string; method: string; url: string },
@@ -287,27 +353,19 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
           );
         }
         if (session?.user?.id && session.session?.id) {
-          const userId = session.user.id;
-          const [roleRow, memberships] = await Promise.all([
-            db
-              .select({ id: instanceUserRoles.id })
-              .from(instanceUserRoles)
-              .where(and(eq(instanceUserRoles.userId, userId), eq(instanceUserRoles.role, "instance_admin")))
-              .then((rows) => rows[0] ?? null),
-            loadActiveUserCompanyMemberships(db, userId),
-          ]);
-          req.actor = {
-            type: "board",
-            userId,
-            sessionId: session.session.id,
-            userName: session.user.name ?? null,
-            userEmail: session.user.email ?? null,
-            companyIds: memberships.map((row) => row.companyId),
-            memberships,
-            isInstanceAdmin: Boolean(roleRow),
-            runId: runIdHeader ?? undefined,
-            source: "session",
-          };
+          req.actor = await boardSessionActor(
+            db,
+            { id: session.user.id, name: session.user.name ?? null, email: session.user.email ?? null },
+            session.session.id,
+            runIdHeader ?? undefined,
+          );
+          next();
+          return;
+        }
+
+        const proxyUser = await resolveTrustedProxyUser(db, req);
+        if (proxyUser) {
+          req.actor = await boardSessionActor(db, proxyUser, `trusted-proxy:${proxyUser.id}`, runIdHeader ?? undefined);
           next();
           return;
         }

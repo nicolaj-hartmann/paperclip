@@ -8,6 +8,7 @@ import type { Db } from "@paperclipai/db";
 import { agentApiKeys, companyMemberships, instanceUserRoles, heartbeatRuns, issues, projects } from "@paperclipai/db";
 import type { DeploymentMode, LiveEvent } from "@paperclipai/shared";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
+import { cloudActorHeaderSourceFromHeaders, resolveTrustedProxyUser } from "../middleware/auth.js";
 import { logger } from "../middleware/logger.js";
 import { activityToastIdentity } from "./activity-toast-identity.js";
 import { taskToastEligible } from "./task-toast-eligibility.js";
@@ -181,7 +182,10 @@ async function authorizeUpgrade(
     }
 
     const session = await opts.resolveSessionFromHeaders(headersFromIncomingMessage(req));
-    const userId = session?.user?.id;
+    const userId = session?.user?.id ?? (await resolveTrustedProxyUser(db, {
+      socket: req.socket ?? {},
+      header: cloudActorHeaderSourceFromHeaders(req.headers).header,
+    }))?.id;
     if (!userId) return null;
 
     const [roleRow, memberships] = await Promise.all([
