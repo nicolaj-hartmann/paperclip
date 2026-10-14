@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { Request, RequestHandler } from "express";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   activityLog,
@@ -161,29 +161,34 @@ async function loadActiveUserCompanyMemberships(db: Db, userId: string) {
     );
 }
 
+export async function loadBoardUserAccess(db: Db, userId: string) {
+  const [roleRow, memberships] = await Promise.all([
+    db
+      .select({ id: instanceUserRoles.id })
+      .from(instanceUserRoles)
+      .where(and(eq(instanceUserRoles.userId, userId), eq(instanceUserRoles.role, "instance_admin")))
+      .then((rows) => rows[0] ?? null),
+    loadActiveUserCompanyMemberships(db, userId),
+  ]);
+  return { isInstanceAdmin: Boolean(roleRow), memberships, companyIds: memberships.map((row) => row.companyId) };
+}
+
 async function boardSessionActor(
   db: Db,
   user: { id: string; name: string | null; email: string | null },
   sessionId: string,
   runId: string | undefined,
 ): Promise<Express.Request["actor"]> {
-  const [roleRow, memberships] = await Promise.all([
-    db
-      .select({ id: instanceUserRoles.id })
-      .from(instanceUserRoles)
-      .where(and(eq(instanceUserRoles.userId, user.id), eq(instanceUserRoles.role, "instance_admin")))
-      .then((rows) => rows[0] ?? null),
-    loadActiveUserCompanyMemberships(db, user.id),
-  ]);
+  const access = await loadBoardUserAccess(db, user.id);
   return {
     type: "board",
     userId: user.id,
     sessionId,
     userName: user.name,
     userEmail: user.email,
-    companyIds: memberships.map((row) => row.companyId),
-    memberships,
-    isInstanceAdmin: Boolean(roleRow),
+    companyIds: access.companyIds,
+    memberships: access.memberships,
+    isInstanceAdmin: access.isInstanceAdmin,
     runId,
     source: "session",
   };
@@ -208,14 +213,14 @@ export async function resolveTrustedProxyUser(
   const existing = await db
     .select({ id: authUsers.id, name: authUsers.name, email: authUsers.email })
     .from(authUsers)
-    .where(eq(authUsers.email, email))
+    .where(sql`lower(${authUsers.email}) = ${email}`)
     .orderBy(authUsers.createdAt)
     .limit(1)
     .then((rows) => rows[0]);
   if (existing) return existing;
 
   const user = {
-    id: `trusted-proxy:${createHash("sha256").update(email).digest("hex").slice(0, 32)}`,
+    id: `tp_${createHash("sha256").update(email).digest("hex").slice(0, 32)}`,
     name: email,
     email,
   };
