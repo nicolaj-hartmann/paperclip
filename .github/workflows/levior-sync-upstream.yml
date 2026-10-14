@@ -1,0 +1,43 @@
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  rebase:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      issues: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - run: |
+          git config user.name levior-sync
+          git config user.email ops@levior.io
+          git remote add upstream https://github.com/paperclipai/paperclip.git
+          git fetch upstream master
+          failed=""
+          for branch in feat/trusted-proxy-auth feat/k8s-sidecar-services levior; do
+            git checkout -q -B "$branch" "origin/$branch"
+            if git rebase -q upstream/master; then
+              git push --force-with-lease origin "$branch"
+            else
+              git rebase --abort
+              failed="$failed $branch"
+            fi
+          done
+          if [ -n "$failed" ]; then
+            gh issue create --title "Upstream sync: rebase conflict on$failed" --body "upstream/master is $(git rev-parse --short upstream/master). Rebase by hand and push with --force-with-lease."
+            exit 1
+          fi
+          gh workflow run levior-image.yml --ref levior
+        env:
+          GH_TOKEN: ${{ github.token }}
