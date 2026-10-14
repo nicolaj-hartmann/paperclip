@@ -25,6 +25,7 @@ import {
   SANDBOX_WORKSPACE_DIR,
 } from "./types.js";
 import { createKubeConfig, makeKubeClients } from "./kube-client.js";
+import type { KubeConfig } from "@kubernetes/client-node";
 import { getAdapterDefaults, buildAdapterEnv, resolveRunAdapterType } from "./adapter-defaults.js";
 import { resolveImage } from "./image-allowlist.js";
 import { buildJobManifest } from "./pod-spec-builder.js";
@@ -140,6 +141,17 @@ function resolveSyncRemoteDir(lease: PluginEnvironmentLease): string {
  * Ready (cached per lease), and find the pod name. The `job` backend carries no
  * file path and is out of scope — file sync is only supported on `sandbox-cr`.
  */
+// The workspace emptyDir is owned by root (group fsGroup) while the agent runs
+// as uid 1000; git refuses such a repository as "dubious ownership" until it is
+// listed as safe. The pod's HOME is a writable emptyDir, so the global config
+// lives there for the life of the sandbox.
+export async function prepareSandboxWorkspace(kc: KubeConfig, namespace: string, podName: string): Promise<void> {
+  const result = await execInPod(kc, namespace, podName, "agent", ["git", "config", "--global", "--add", "safe.directory", "*"]);
+  if (result.exitCode !== 0) {
+    throw new Error(`Could not mark the sandbox workspace safe for git (exit ${result.exitCode}): ${result.stderr}`);
+  }
+}
+
 async function resolveSyncPodExec(
   params:
     | PluginEnvironmentSyncInParams
@@ -180,7 +192,6 @@ async function resolveSyncPodExec(
       timeoutMs,
       pollMs: 2000,
     });
-    readySandboxesByLease.add(lease.providerLeaseId);
   }
 
   const podName =
@@ -189,6 +200,11 @@ async function resolveSyncPodExec(
       : await sandboxCrOrchestrator.findPod(clients, namespace, lease.providerLeaseId);
   if (!podName) {
     throw new Error("Kubernetes file sync could not resolve the Sandbox pod name.");
+  }
+
+  if (!readySandboxesByLease.has(lease.providerLeaseId)) {
+    await prepareSandboxWorkspace(kc, namespace, podName);
+    readySandboxesByLease.add(lease.providerLeaseId);
   }
 
   // Bind the streaming exec: raw tar bytes move over stdin/stdout straight to and
