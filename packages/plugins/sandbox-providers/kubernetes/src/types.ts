@@ -34,6 +34,10 @@ export const kubernetesProviderConfigSchema = z
     podActivityDeadlineSec: z.number().int().positive().default(3600),
     podReadyTimeoutSec: z.number().int().positive().default(300),
 
+    cacheVolumeSize: z.string().min(1).optional(),
+    reuseLease: z.boolean().default(false),
+    idleShutdownSec: z.number().int().positive().default(600),
+
     /**
      * The adapter type that Jobs in this environment will run.
      * Each Kubernetes environment is bound to one adapter; create multiple
@@ -96,7 +100,10 @@ export const kubernetesProviderConfigSchema = z
       message:
         "kubernetes provider requires one of `inCluster` or `kubeconfig`",
     },
-  );
+  )
+  .refine((cfg) => !cfg.reuseLease || cfg.backend === "sandbox-cr", {
+    message: "reuseLease requires backend `sandbox-cr`",
+  });
 
 export type KubernetesProviderConfig = z.infer<typeof kubernetesProviderConfigSchema>;
 

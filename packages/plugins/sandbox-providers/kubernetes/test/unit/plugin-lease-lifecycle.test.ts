@@ -49,10 +49,12 @@ describe("onEnvironmentResumeLease", () => {
     expect(plugin.definition.onEnvironmentDestroyLease).toBeTypeOf("function");
   });
 
-  it("returns a valid lease handle for a live sandbox-cr lease", async () => {
+  it("returns a valid lease handle for a live sandbox-cr lease and cancels its idle shutdown", async () => {
+    const patchCr = vi.fn().mockResolvedValue({});
     h.clients = {
       custom: {
         getNamespacedCustomObject: vi.fn().mockResolvedValue(readySandboxCr("pc-abc-pod")),
+        patchNamespacedCustomObject: patchCr,
       },
       core: {
         readNamespacedPod: vi.fn().mockResolvedValue({
@@ -86,6 +88,25 @@ describe("onEnvironmentResumeLease", () => {
         nativeFileSyncUnsupported: false,
       }),
     );
+    expect(patchCr).toHaveBeenCalledWith(
+      expect.objectContaining({ namespace: "paperclip-acme", name: "pc-abc", body: { spec: { shutdownTime: null } } }),
+      expect.anything(),
+    );
+  });
+
+  it("reports the lease expired when the controller removed the Sandbox before its shutdown could be cancelled", async () => {
+    h.clients = {
+      custom: {
+        getNamespacedCustomObject: vi.fn().mockResolvedValue(readySandboxCr("pc-abc-pod")),
+        patchNamespacedCustomObject: vi.fn().mockRejectedValue(notFound()),
+      },
+      core: { readNamespacedPod: vi.fn().mockResolvedValue({ metadata: {}, status: { phase: "Running" } }) },
+    };
+    const lease = await plugin.definition.onEnvironmentResumeLease!({
+      driverKey: "kubernetes", companyId: "acme", environmentId: "env-1", config: CONFIG,
+      providerLeaseId: "pc-abc", leaseMetadata: leaseMetadata(),
+    });
+    expect(lease).toEqual({ providerLeaseId: null, metadata: { expired: true, reason: "Sandbox CR no longer exists" } });
   });
 
   it("flags a resumed job-backend lease as native-sync-unsupported so the server keeps the base64 fallback", async () => {
@@ -160,6 +181,43 @@ describe("onEnvironmentResumeLease", () => {
 
     expect(lease.providerLeaseId).toBeNull();
     expect(lease.metadata?.expired).toBe(true);
+  });
+});
+
+describe("onEnvironmentReleaseLease", () => {
+  function release(config: Record<string, unknown>, extra: Record<string, unknown> = {}) {
+    const deleteCr = vi.fn().mockResolvedValue({});
+    const patchCr = vi.fn().mockResolvedValue({});
+    h.clients = { custom: { deleteNamespacedCustomObject: deleteCr, patchNamespacedCustomObject: patchCr } };
+    const done = plugin.definition.onEnvironmentReleaseLease!({
+      driverKey: "kubernetes", companyId: "acme", environmentId: "env-1", config,
+      providerLeaseId: "pc-abc", leaseMetadata: leaseMetadata(), ...extra,
+    });
+    return { done, deleteCr, patchCr };
+  }
+
+  it("deletes the Sandbox CR by default", async () => {
+    const { done, deleteCr, patchCr } = release(CONFIG);
+    await done;
+    expect(deleteCr).toHaveBeenCalledWith(expect.objectContaining({ namespace: "paperclip-acme", name: "pc-abc" }));
+    expect(patchCr).not.toHaveBeenCalled();
+  });
+
+  it("keeps a reusable sandbox alive and lets the controller delete it after the idle period", async () => {
+    const before = Date.now();
+    const { done, deleteCr, patchCr } = release({ ...CONFIG, reuseLease: true, idleShutdownSec: 120 });
+    await done;
+    expect(deleteCr).not.toHaveBeenCalled();
+    const shutdownAt = Date.parse((patchCr.mock.calls[0][0].body as { spec: { shutdownTime: string } }).spec.shutdownTime);
+    expect(shutdownAt).toBeGreaterThanOrEqual(before + 120_000);
+    expect(shutdownAt).toBeLessThanOrEqual(Date.now() + 120_000);
+  });
+
+  it("deletes a reusable sandbox when the operator cancels active work", async () => {
+    const { done, deleteCr, patchCr } = release({ ...CONFIG, reuseLease: true }, { cancelActiveWork: true });
+    await done;
+    expect(deleteCr).toHaveBeenCalled();
+    expect(patchCr).not.toHaveBeenCalled();
   });
 });
 

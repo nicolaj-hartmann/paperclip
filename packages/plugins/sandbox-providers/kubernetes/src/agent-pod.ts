@@ -29,11 +29,13 @@ export function buildSidecars(services: SidecarService[]): Record<string, unknow
   });
 }
 
-export function buildAgentVolumes(services: SidecarService[]): Record<string, unknown>[] {
+export const CACHE_VOLUME_CLAIM = "paperclip-cache";
+
+export function buildAgentVolumes(services: SidecarService[], sharedCache = false): Record<string, unknown>[] {
   return [
     { name: "workspace", emptyDir: { sizeLimit: "8Gi" } },
     { name: "home", emptyDir: { sizeLimit: "4Gi" } },
-    { name: "cache", emptyDir: { sizeLimit: "1Gi" } },
+    { name: "cache", ...(sharedCache ? { persistentVolumeClaim: { claimName: CACHE_VOLUME_CLAIM } } : { emptyDir: { sizeLimit: "1Gi" } }) },
     { name: "tmp", emptyDir: { sizeLimit: "4Gi" } },
     ...services.flatMap((service) =>
       service.volumes.map((_, index) => ({ name: serviceVolumeName(service, index), emptyDir: { sizeLimit: "4Gi" } })),

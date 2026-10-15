@@ -90,6 +90,19 @@ describe("buildSandboxCrManifest", () => {
     ).toBe(true);
   });
 
+  it("sets shutdownPolicy Delete so a later shutdownTime removes the whole Sandbox", () => {
+    expect(buildSandboxCrManifest(baseInput).spec.shutdownPolicy).toBe("Delete");
+  });
+
+  it("mounts the tenant's shared cache claim at the cache path when sharedCache is set", () => {
+    const volumes = buildSandboxCrManifest({ ...baseInput, sharedCache: true }).spec.podTemplate.spec.volumes;
+    expect(volumes.find((v: { name: string }) => v.name === "cache")).toEqual({
+      name: "cache",
+      persistentVolumeClaim: { claimName: "paperclip-cache" },
+    });
+    expect(volumes.filter((v: { emptyDir?: unknown }) => v.emptyDir !== undefined)).toHaveLength(3);
+  });
+
   it("envFrom references the per-run secret", () => {
     const cr = buildSandboxCrManifest(baseInput);
     const envFrom = cr.spec.podTemplate.spec.containers[0].envFrom;

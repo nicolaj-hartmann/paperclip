@@ -1,4 +1,5 @@
 import type { KubeClients } from "./kube-client.js";
+import { CACHE_VOLUME_CLAIM } from "./agent-pod.js";
 import { buildNetworkPolicyManifests } from "./network-policy.js";
 import { buildCiliumNetworkPolicyManifest } from "./cilium-network-policy.js";
 
@@ -18,6 +19,7 @@ export interface EnsureTenantInput {
     limitsMemory: string;
   };
   imagePullSecrets: string[];
+  cacheVolumeSize?: string;
 }
 
 const SERVICE_ACCOUNT_NAME = "paperclip-tenant-sa";
@@ -51,6 +53,29 @@ export async function ensureTenant(clients: KubeClients, input: EnsureTenantInpu
   await ensureResourceQuota(clients, input);
   await ensureLimitRange(clients, input);
   await ensureNetworkPolicies(clients, input);
+  await ensureCacheVolume(clients, input);
+}
+
+async function ensureCacheVolume(clients: KubeClients, input: EnsureTenantInput): Promise<void> {
+  const namespace = input.namespace;
+  if (!input.cacheVolumeSize) return;
+  try {
+    await clients.core.readNamespacedPersistentVolumeClaim({ name: CACHE_VOLUME_CLAIM, namespace });
+    return;
+  } catch (err) {
+    if (!isNotFound(err)) throw err;
+  }
+  await createIgnoringAlreadyExists(
+    clients.core.createNamespacedPersistentVolumeClaim({
+      namespace,
+      body: {
+        apiVersion: "v1",
+        kind: "PersistentVolumeClaim",
+        metadata: { name: CACHE_VOLUME_CLAIM, namespace, labels: { "paperclip.io/managed-by": "paperclip-k8s-plugin" } },
+        spec: { accessModes: ["ReadWriteMany"], resources: { requests: { storage: input.cacheVolumeSize } } },
+      },
+    }),
+  );
 }
 
 async function ensureNamespace(clients: KubeClients, input: EnsureTenantInput): Promise<void> {

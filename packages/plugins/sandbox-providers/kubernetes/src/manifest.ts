@@ -21,6 +21,7 @@ const manifest: PaperclipPluginManifestV1 = {
       driverKey: "kubernetes",
       kind: "sandbox_provider",
       displayName: "Kubernetes",
+      supportsReusableLeases: true,
       description:
         "Dispatches agent runs in per-tenant Kubernetes namespaces. Default backend (sandbox-cr, alpha) uses kubernetes-sigs/agent-sandbox for multi-command exec; fallback backend (job) uses stable batch/v1 Job for clusters without agent-sandbox installed.",
       configSchema: {
@@ -101,6 +102,21 @@ const manifest: PaperclipPluginManifestV1 = {
             type: "integer",
             minimum: 1,
             description: "How long a fresh sandbox pod may take to become Ready, including the image pull (default: 300).",
+          },
+          cacheVolumeSize: {
+            type: "string",
+            description:
+              "Size of a ReadWriteMany PersistentVolumeClaim shared by all agent pods of the tenant at /home/paperclip/.cache (e.g. `20Gi`). Omit for a per-pod emptyDir.",
+          },
+          reuseLease: {
+            type: "boolean",
+            description:
+              "Keep a finished run's sandbox so the next run on the same workspace resumes it instead of starting cold. Requires backend sandbox-cr.",
+          },
+          idleShutdownSec: {
+            type: "integer",
+            minimum: 1,
+            description: "With reuseLease, how long an idle sandbox is kept after a run ends before the controller deletes it (default: 600).",
           },
           adapterType: {
             type: "string",

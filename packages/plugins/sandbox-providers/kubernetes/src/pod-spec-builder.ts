@@ -18,6 +18,7 @@ export interface BuildJobManifestInput {
   ttlSecondsAfterFinished: number;
   imagePullSecrets?: string[];
   services?: SidecarService[];
+  sharedCache?: boolean;
 }
 
 export function buildJobManifest(input: BuildJobManifestInput): Record<string, unknown> {
@@ -91,7 +92,7 @@ export function buildJobManifest(input: BuildJobManifestInput): Record<string, u
               ],
             },
           ],
-          volumes: buildAgentVolumes(services),
+          volumes: buildAgentVolumes(services, input.sharedCache),
         },
       },
     },

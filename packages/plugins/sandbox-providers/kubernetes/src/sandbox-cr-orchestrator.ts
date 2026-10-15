@@ -21,6 +21,7 @@
  * should use execInPod() and capture its stdout/stderr directly.
  */
 
+import { PatchStrategy, setHeaderOptions } from "@kubernetes/client-node";
 import type { KubeClients } from "./kube-client.js";
 import type { SandboxOrchestrator, SandboxStatus } from "./sandbox-orchestrator.js";
 
@@ -227,6 +228,20 @@ export async function streamSandboxLogs(
   });
   const text = (result as string) ?? "";
   if (text.length > 0) await onChunk("stdout", text);
+}
+
+/** Lets the agent-sandbox controller delete the Sandbox at `shutdownTime`; null cancels the deadline. */
+export async function setSandboxShutdown(
+  clients: KubeClients,
+  namespace: string,
+  name: string,
+  shutdownTime: string | null,
+): Promise<void> {
+  await clients.custom.patchNamespacedCustomObject(
+    { group: SANDBOX_GROUP, version: SANDBOX_VERSION, namespace, plural: SANDBOX_PLURAL, name,
+      body: { spec: { shutdownTime } } },
+    setHeaderOptions("Content-Type", PatchStrategy.MergePatch),
+  );
 }
 
 export async function deleteSandboxCr(

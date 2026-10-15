@@ -74,6 +74,9 @@ Common optional fields:
 | `serviceAccountAnnotations` | `{}` | Annotations applied to per-tenant ServiceAccount (e.g. IRSA `eks.amazonaws.com/role-arn`). |
 | `jobTtlSecondsAfterFinished` | `900` | Seconds after a Job completes before garbage-collection. |
 | `podActivityDeadlineSec` | `3600` | Hard ceiling on a single run's wall-clock time. |
+| `cacheVolumeSize` | (none) | Size of a ReadWriteMany PVC shared by all agent pods of the tenant at `/home/paperclip/.cache` (e.g. `20Gi`); omit for a per-pod emptyDir. |
+| `reuseLease` | `false` | Keep a finished run's sandbox so the next run on the same workspace resumes it (sandbox-cr only). A reused sandbox keeps the egress grant and env of the run that created it. |
+| `idleShutdownSec` | `600` | With `reuseLease`, how long an idle sandbox is kept after a run before the controller deletes it. |
 | `podReadyTimeoutSec` | `300` | How long a fresh sandbox pod may take to become Ready, including the image pull; the server allows an `environmentExecute` call this much longer than the command itself. |
 
 Full JSON Schema in `src/manifest.ts`.

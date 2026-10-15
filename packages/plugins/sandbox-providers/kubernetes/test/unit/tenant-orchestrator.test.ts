@@ -26,6 +26,8 @@ function makeMockClients() {
       readNamespacedLimitRange: vi.fn().mockRejectedValue({ code: 404 }),
       createNamespacedLimitRange: track("LimitRange"),
       readNamespace: vi.fn().mockRejectedValue({ code: 404 }),
+      readNamespacedPersistentVolumeClaim: vi.fn().mockRejectedValue({ code: 404 }),
+      createNamespacedPersistentVolumeClaim: track("PersistentVolumeClaim"),
     },
     rbac: {
       readNamespacedRole: vi.fn().mockRejectedValue({ code: 404 }),
@@ -91,6 +93,20 @@ describe("ensureTenant", () => {
       "NetworkPolicy",
       "NetworkPolicy",
     ]);
+  });
+
+  it("creates a shared ReadWriteMany cache claim only when cacheVolumeSize is set", async () => {
+    const clients = makeMockClients();
+    await ensureTenant(clients as never, { ...baseInput, cacheVolumeSize: "20Gi" });
+    const pvc = clients.calls.filter((c) => c.kind === "PersistentVolumeClaim");
+    expect(pvc).toHaveLength(1);
+    expect(pvc[0].body).toMatchObject({
+      metadata: { name: "paperclip-cache", namespace: "paperclip-acme" },
+      spec: { accessModes: ["ReadWriteMany"], resources: { requests: { storage: "20Gi" } } },
+    });
+    const without = makeMockClients();
+    await ensureTenant(without as never, baseInput);
+    expect(without.calls.filter((c) => c.kind === "PersistentVolumeClaim")).toHaveLength(0);
   });
 
   it("creates a CiliumNetworkPolicy instead of standard egress when egressMode=cilium", async () => {

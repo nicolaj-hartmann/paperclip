@@ -36,6 +36,7 @@ export interface BuildSandboxCrManifestInput {
   runtimeClassName?: string;
   imagePullSecrets?: string[];
   services?: SidecarService[];
+  sharedCache?: boolean;
 }
 
 export function buildSandboxCrManifest(
@@ -57,6 +58,7 @@ export function buildSandboxCrManifest(
       // explicit delete.
     },
     spec: {
+      shutdownPolicy: "Delete",
       podTemplate: {
         metadata: {
           labels: podLabels,
@@ -137,7 +139,7 @@ export function buildSandboxCrManifest(
               ],
             },
           ],
-          volumes: buildAgentVolumes(services),
+          volumes: buildAgentVolumes(services, input.sharedCache),
         },
       },
     },

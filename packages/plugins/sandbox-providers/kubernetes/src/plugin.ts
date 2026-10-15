@@ -37,11 +37,12 @@ import { jobOrchestrator, JobTimeoutError } from "./job-orchestrator.js";
 import {
   sandboxCrOrchestrator,
   SandboxCrTimeoutError,
+  setSandboxShutdown,
   SANDBOX_API_VERSION,
 } from "./sandbox-cr-orchestrator.js";
 import { execInPod, execInPodStreaming, wrapCommandWithEnv } from "./pod-exec.js";
 import { performSyncIn, performSyncOut, type PodStreamExec } from "./file-sync.js";
-import { checkLeaseResumable, destroyLeaseResources } from "./lease-lifecycle.js";
+import { checkLeaseResumable, destroyLeaseResources, isKubeNotFoundError } from "./lease-lifecycle.js";
 import {
   appendNetworkEgressDenyHint,
   createScopedNetworkEgressPolicyOrReleaseWorkload,
@@ -353,6 +354,7 @@ const plugin = definePlugin({
       egressAllowCidrs: config.egressAllowCidrs,
       resourceQuota: DEFAULT_RESOURCE_QUOTA,
       imagePullSecrets: config.imagePullSecrets,
+      cacheVolumeSize: config.cacheVolumeSize,
     });
 
     const jobName = `pc-${newRunUlidDns()}`;
@@ -375,6 +377,7 @@ const plugin = definePlugin({
 
     // Pick the orchestrator and build the appropriate manifest based on backend.
     const isSandboxCrBackend = config.backend === "sandbox-cr";
+    const sharedCache = !!config.cacheVolumeSize;
     const orchestrator = isSandboxCrBackend ? sandboxCrOrchestrator : jobOrchestrator;
 
     const manifest = isSandboxCrBackend
@@ -390,6 +393,7 @@ const plugin = definePlugin({
           runtimeClassName: config.runtimeClassName,
           imagePullSecrets: config.imagePullSecrets,
           services: config.services,
+          sharedCache,
         })
       : buildJobManifest({
           namespace,
@@ -405,6 +409,7 @@ const plugin = definePlugin({
           ttlSecondsAfterFinished: config.jobTtlSecondsAfterFinished,
           imagePullSecrets: config.imagePullSecrets,
           services: config.services,
+          sharedCache,
         });
 
     const { uid: ownerUid } = await orchestrator.claim(clients, namespace, manifest);
@@ -528,6 +533,12 @@ const plugin = definePlugin({
     // interceptor buffers a previous run on this lease may have left behind.
     uploadInterceptorsByLease.delete(params.providerLeaseId);
     if (leaseBackend === "sandbox-cr") {
+      try {
+        await setSandboxShutdown(clients, namespace, params.providerLeaseId, null);
+      } catch (err) {
+        if (!isKubeNotFoundError(err)) throw err;
+        return { providerLeaseId: null, metadata: { expired: true, reason: "Sandbox CR no longer exists" } };
+      }
       // We just observed the Sandbox pod Ready, so the first exec on the
       // resumed lease can skip its readiness poll.
       readySandboxesByLease.add(params.providerLeaseId);
@@ -610,8 +621,14 @@ const plugin = definePlugin({
     uploadInterceptorsByLease.delete(params.providerLeaseId);
     readySandboxesByLease.delete(params.providerLeaseId);
 
+    const keepWarm = config.reuseLease && leaseBackend === "sandbox-cr" && !params.cancelActiveWork;
     try {
-      await releaseOrchestrator.release(clients, namespace, params.providerLeaseId);
+      if (keepWarm) {
+        const shutdownTime = new Date(Date.now() + config.idleShutdownSec * 1000).toISOString();
+        await setSandboxShutdown(clients, namespace, params.providerLeaseId, shutdownTime);
+      } else {
+        await releaseOrchestrator.release(clients, namespace, params.providerLeaseId);
+      }
     } catch (err) {
       // If the resource is already gone (404), that's fine.
       const code = (err as { code?: number; statusCode?: number }).code

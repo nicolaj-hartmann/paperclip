@@ -25,6 +25,11 @@ describe("kubernetesProviderConfigSchema", () => {
     );
   });
 
+  it("rejects reuseLease on the job backend", () => {
+    expect(() => parseKubernetesProviderConfig({ inCluster: true, backend: "job", reuseLease: true })).toThrow(/sandbox-cr/);
+    expect(parseKubernetesProviderConfig({ inCluster: true, reuseLease: true }).idleShutdownSec).toBe(600);
+  });
+
   it("rejects invalid companySlug", () => {
     expect(() =>
       parseKubernetesProviderConfig({ inCluster: true, companySlug: "INVALID UPPER" }),
