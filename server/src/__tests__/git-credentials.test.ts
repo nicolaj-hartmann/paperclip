@@ -12,7 +12,9 @@ import {
   combineGitAuthEnv,
   createGitRemoteAuthProvider,
   describeGitAuthFailure,
+  gitAgentIdentityEnv,
   gitHostOfHttpsRemoteUrl,
+  resolveGitHostInvocation,
   gitHostTokenSecretName,
   isGitHubHttpsRemoteUrl,
   scrubGitCredentialText,
@@ -219,6 +221,38 @@ describe("git host secrets", () => {
     expect(gitHostOfHttpsRemoteUrl("git@code.example.com:org/repo.git")).toBeNull();
   });
 
+  it("prefers the responsible user's own host token and falls back to the company secret", async () => {
+    const secrets = buildSecretsFake({ GIT_TOKEN_CODE_EXAMPLE_COM: "company-token" });
+    const resolveUserSecretValue = vi.fn(async (_companyId: string, input: { definitionKey?: string | null; responsibleUserId?: string | null }) =>
+      input.responsibleUserId === "user-1" && input.definitionKey === "GIT_TOKEN_CODE_EXAMPLE_COM" ? { value: " user-token " } : null);
+    const deps = { ...secrets, resolveUserSecretValue } as unknown as Parameters<typeof resolveGitHostInvocation>[0];
+    const own = await resolveGitHostInvocation(deps, "company-1", "code.example.com", { responsibleUserId: "user-1" }, "user-1");
+    expect(own).toMatchObject({ source: "user_secret", secretName: "GIT_TOKEN_CODE_EXAMPLE_COM" });
+    expect(own?.env.PAPERCLIP_GIT_TOKEN_CODE_EXAMPLE_COM).toBe("user-token");
+    expect(resolveUserSecretValue.mock.calls[0][1]).toMatchObject({ definitionKey: "GIT_TOKEN_CODE_EXAMPLE_COM", responsibleUserId: "user-1", required: false });
+    expect(resolveUserSecretValue.mock.calls[0][2]).toMatchObject({ consumerType: "system", responsibleUserId: "user-1" });
+    expect(secrets.getByName).not.toHaveBeenCalled();
+    const other = await resolveGitHostInvocation(deps, "company-1", "code.example.com", { responsibleUserId: "user-2" }, "user-2");
+    expect(other).toMatchObject({ source: "company_secret" });
+    expect(other?.env.PAPERCLIP_GIT_TOKEN_CODE_EXAMPLE_COM).toBe("company-token");
+    resolveUserSecretValue.mockRejectedValueOnce(new Error("vault down"));
+    expect((await resolveGitHostInvocation(deps, "company-1", "code.example.com", { responsibleUserId: "user-1" }, "user-1"))?.source).toBe("company_secret");
+    expect(resolveUserSecretValue).toHaveBeenCalledTimes(3);
+    const serverSide = createGitRemoteAuthProvider(fakeDb, "company-1", { responsibleUserId: "user-1" }, { secrets: deps as never, env: {} });
+    expect((await serverSide("https://code.example.com/org/repo.git"))?.source).toBe("company_secret");
+    expect(resolveUserSecretValue).toHaveBeenCalledTimes(3);
+  });
+
+  it("derives the agent's commit identity from the owner's plus-tagged address", () => {
+    expect(gitAgentIdentityEnv("Obsidian Engineer", "nhh@softwarehuset.com")).toEqual({
+      GIT_AUTHOR_NAME: "Obsidian Engineer", GIT_AUTHOR_EMAIL: "nhh+obsidian-engineer@softwarehuset.com",
+      GIT_COMMITTER_NAME: "Obsidian Engineer", GIT_COMMITTER_EMAIL: "nhh+obsidian-engineer@softwarehuset.com",
+    });
+    expect(gitAgentIdentityEnv("  CEO / Ops (v2)  ", "a.b@x.io")?.GIT_AUTHOR_EMAIL).toBe("a.b+ceo-ops-v2@x.io");
+    expect(gitAgentIdentityEnv("Agent", "not-an-email")).toBeNull();
+    expect(gitAgentIdentityEnv("***", "a@b.c")).toBeNull();
+  });
+
   it("keeps exactly one credential.helper reset when combining invocations", () => {
     const github = buildGitAuthInvocation({ token: "gh", source: "company_secret", secretName: "GITHUB_TOKEN" });
     const env = combineGitAuthEnv([github, buildGitHostAuthInvocation("code.example.com", "forge", "GIT_TOKEN_CODE_EXAMPLE_COM")]);
@@ -380,6 +414,10 @@ describe("describeGitAuthFailure", () => {
       error: "fatal: Authentication failed",
       used: { source: "company_secret", secretName: "GH_TOKEN" },
     })).toContain("the GH_TOKEN company-secret GitHub credential");
+    expect(describeGitAuthFailure({
+      error: "fatal: Authentication failed",
+      used: { source: "user_secret", secretName: "GIT_TOKEN_CODE_EXAMPLE_COM" },
+    })).toContain("the GIT_TOKEN_CODE_EXAMPLE_COM user-secret credential");
   });
 
   it("names the server environment when an env credential was used", () => {

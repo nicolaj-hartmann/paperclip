@@ -90,9 +90,9 @@ async function main() {
           : 'Check the GitHub connection in Paperclip';
         process.stderr.write('Paperclip: GitHub access unavailable: ' + reason + '. Continuing without GitHub credentials.\n');
       }
-      // Host tokens and config arrive whatever the GitHub status; GitHub identity only when
-      // it is available. Brokered config entries follow the launcher's own, so its identity
-      // and askpass settings survive whatever the broker adds.
+      // Host tokens, config and the commit identity the broker chose arrive whatever the
+      // GitHub status; GitHub tokens only when it is available. Brokered config entries
+      // follow the launcher's own, so its askpass settings survive whatever the broker adds.
       if (configReady) {
         const base = Number(env.GIT_CONFIG_COUNT) || 0;
         let added = 0;
@@ -101,8 +101,8 @@ async function main() {
           const entry = /^GIT_CONFIG_(KEY|VALUE)_(\d+)$/.exec(key);
           if (entry) env['GIT_CONFIG_' + entry[1] + '_' + (base + Number(entry[2]))] = value;
           else if (key === 'GIT_CONFIG_COUNT') added = Number(value) || 0;
-          else if (/^(PAPERCLIP_GIT_TOKEN_[A-Z0-9_]+|GIT_TERMINAL_PROMPT)$/.test(key)) env[key] = value;
-          else if (result.status === 'available' && /^(GH_TOKEN|GITHUB_TOKEN|PAPERCLIP_GIT_TOKEN|GIT_AUTHOR_(NAME|EMAIL)|GIT_COMMITTER_(NAME|EMAIL))$/.test(key)) env[key] = value;
+          else if (/^(PAPERCLIP_GIT_TOKEN_[A-Z0-9_]+|GIT_TERMINAL_PROMPT|GIT_AUTHOR_(NAME|EMAIL)|GIT_COMMITTER_(NAME|EMAIL))$/.test(key)) env[key] = value;
+          else if (result.status === 'available' && /^(GH_TOKEN|GITHUB_TOKEN|PAPERCLIP_GIT_TOKEN)$/.test(key)) env[key] = value;
         }
         env.GIT_CONFIG_COUNT = String(base + added);
       }

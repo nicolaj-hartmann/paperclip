@@ -73,6 +73,8 @@ describe("managed GitHub launchers", () => {
       res.setHeader("content-type", "application/json");
       res.end(JSON.stringify({ status: "unavailable", reason: "No GitHub identity", env: {
         PAPERCLIP_GIT_TOKEN_CODE_EXAMPLE_COM: "forge-token",
+        GIT_AUTHOR_NAME: "Obsidian Engineer", GIT_AUTHOR_EMAIL: "nhh+obsidian-engineer@example.test",
+        GIT_COMMITTER_NAME: "Obsidian Engineer", GIT_COMMITTER_EMAIL: "nhh+obsidian-engineer@example.test",
         GIT_CONFIG_COUNT: "2", GIT_CONFIG_KEY_0: "credential.helper", GIT_CONFIG_VALUE_0: "",
         GIT_CONFIG_KEY_1: "credential.https://code.example.com.helper",
         GIT_CONFIG_VALUE_1: "!f() { if [ \"$1\" = get ]; then echo username=x; echo \"password=$PAPERCLIP_GIT_TOKEN_CODE_EXAMPLE_COM\"; fi; }; f",
@@ -93,6 +95,8 @@ describe("managed GitHub launchers", () => {
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("password=forge-token");
     expect((await exec(path.join(bin, "git"), ["config", "--get", "user.useConfigOnly"], { cwd: root, env })).stdout.trim()).toBe("true");
+    expect((await exec(path.join(bin, "git"), ["var", "GIT_AUTHOR_IDENT"], { cwd: root, env })).stdout).toContain("Obsidian Engineer <nhh+obsidian-engineer@example.test>");
+    expect((await exec(path.join(bin, "git"), ["var", "GIT_COMMITTER_IDENT"], { cwd: root, env })).stdout).toContain("Obsidian Engineer <nhh+obsidian-engineer@example.test>");
   });
 
   it("explains unavailable access while allowing local work without credentials", async () => {

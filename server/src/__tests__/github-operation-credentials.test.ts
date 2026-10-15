@@ -9,6 +9,7 @@ import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   agents,
+  authUsers,
   companies,
   companyMemberships,
   companySecrets,
@@ -596,8 +597,7 @@ const support = await getEmbeddedPostgresTestSupport();
         env: {},
       });
     });
-    it("serves GIT_TOKEN_<HOST> secrets for the project's non-GitHub remotes", async () => {
-      const input = await seed();
+    async function seedForge(input: Awaited<ReturnType<typeof seed>>) {
       const projectId = randomUUID();
       await db.insert(projects).values({ id: projectId, companyId: input.companyId, name: "Forge" });
       await db.insert(projectWorkspaces).values([
@@ -605,14 +605,50 @@ const support = await getEmbeddedPostgresTestSupport();
         { companyId: input.companyId, projectId, name: "github", sourceType: "remote_repo", repoUrl: "https://github.com/org/repo.git" },
       ]);
       await db.update(issues).set({ projectId }).where(eq(issues.id, input.issueId));
+      await db.insert(authUsers).values({ id: "A", name: "Nicolaj", email: "nhh@example.test", createdAt: new Date(), updatedAt: new Date() }).onConflictDoNothing();
       vault.getByName.mockImplementation(async (_company, name) => name === "GIT_TOKEN_CODE_EXAMPLE_COM" ? { id: "secret-host" } : null);
+    }
+    const agentIdentity = {
+      GIT_AUTHOR_NAME: "Shared", GIT_AUTHOR_EMAIL: "nhh+shared@example.test",
+      GIT_COMMITTER_NAME: "Shared", GIT_COMMITTER_EMAIL: "nhh+shared@example.test",
+    };
+    it("serves GIT_TOKEN_<HOST> company secrets for the project's non-GitHub remotes, with the agent's commit identity", async () => {
+      const input = await seed();
+      await seedForge(input);
+      vault.resolveUserSecretValue.mockResolvedValueOnce(null as never);
       try {
         const result = await resolveGitHubOperationCredentials(db, input);
         expect(result.status).toBe("absent");
         expect(result.env.PAPERCLIP_GIT_TOKEN_CODE_EXAMPLE_COM).toBe("test-dedicated-token");
         expect(result.env.GH_TOKEN).toBeUndefined();
         expect(result.env.GIT_CONFIG_KEY_1).toBe("credential.https://code.example.com.helper");
+        expect(result.env).toMatchObject(agentIdentity);
+        expect(vault.resolveUserSecretValue.mock.calls.at(-1)?.[1]).toMatchObject({ definitionKey: "GIT_TOKEN_CODE_EXAMPLE_COM", responsibleUserId: "A", required: false });
         expect(vault.getByName.mock.calls.map((call) => call[1])).toEqual(["GIT_TOKEN_CODE_EXAMPLE_COM"]);
+      } finally {
+        vault.getByName.mockImplementation(async () => null);
+      }
+    });
+    it("prefers the responsible person's own GIT_TOKEN_<HOST> user secret", async () => {
+      const input = await seed();
+      await seedForge(input);
+      try {
+        const result = await resolveGitHubOperationCredentials(db, input);
+        expect(result.env.PAPERCLIP_GIT_TOKEN_CODE_EXAMPLE_COM).toBe("test-token-A");
+        expect(result.env).toMatchObject(agentIdentity);
+        expect(vault.getByName).not.toHaveBeenCalledWith(expect.anything(), "GIT_TOKEN_CODE_EXAMPLE_COM");
+      } finally {
+        vault.getByName.mockImplementation(async () => null);
+      }
+    });
+    it("uses the company host token and no personal identity for the company default person", async () => {
+      const input = await seed();
+      await seedForge(input);
+      await db.update(runIdentityContexts).set({ cause: "company_default" }).where(eq(runIdentityContexts.runId, input.runId));
+      try {
+        const result = await resolveGitHubOperationCredentials(db, input);
+        expect(result.env.PAPERCLIP_GIT_TOKEN_CODE_EXAMPLE_COM).toBe("test-dedicated-token");
+        expect(result.env.GIT_AUTHOR_NAME).toBeUndefined();
       } finally {
         vault.getByName.mockImplementation(async () => null);
       }

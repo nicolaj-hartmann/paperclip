@@ -2,6 +2,7 @@ import { and, eq } from "drizzle-orm";
 import { isUuidLike } from "@paperclipai/shared";
 import {
   agents,
+  authUsers,
   heartbeatRuns,
   issues,
   projects,
@@ -14,6 +15,7 @@ import { captureRunIdentity } from "./run-identity.js";
 import {
   buildGitAuthInvocation,
   combineGitAuthEnv,
+  gitAgentIdentityEnv,
   gitHostOfHttpsRemoteUrl,
   resolveGitHostInvocation,
   resolveManagedGitHubCredential,
@@ -37,8 +39,8 @@ export type GitHubCredentialSummary = {
 async function allowsGitHubCredentialExport(
   db: Db,
   run: typeof heartbeatRuns.$inferSelect,
-): Promise<{ allowed: boolean; projectId: string | null }> {
-  const denied = { allowed: false, projectId: null };
+): Promise<{ allowed: boolean; projectId: string | null; agentName: string | null }> {
+  const denied = { allowed: false, projectId: null, agentName: null };
   const issueId =
     run.contextSnapshot?.issueId ??
     run.contextSnapshot?.taskId ??
@@ -50,7 +52,7 @@ async function allowsGitHubCredentialExport(
   )
     return denied;
   const [agent] = await db
-    .select({ companyId: agents.companyId, permissions: agents.permissions })
+    .select({ companyId: agents.companyId, permissions: agents.permissions, name: agents.name })
     .from(agents)
     .where(
       and(eq(agents.id, run.agentId), eq(agents.companyId, run.companyId)),
@@ -105,7 +107,7 @@ async function allowsGitHubCredentialExport(
       executionPolicy: run.contextSnapshot?.executionPolicy,
     },
   }).kind === "standard";
-  return allowed ? { allowed, projectId: typeof projectId === "string" ? projectId : null } : denied;
+  return allowed ? { allowed, projectId: typeof projectId === "string" ? projectId : null, agentName: agent.name } : denied;
 }
 
 /** No company secrets or ambient credentials are consulted by this path. */
@@ -144,6 +146,7 @@ export async function resolveGitHubOperationCredentials(
     };
   }
   const secrets = secretService(db);
+  const responsibleUserId = context.cause === "company_default" ? null : (context.responsibleUserId ?? null);
   try {
     const resolved = await resolveManagedGitHubCredential(
       db,
@@ -153,10 +156,7 @@ export async function resolveGitHubOperationCredentials(
         agentId: input.agentId,
         heartbeatRunId: input.runId,
         allowStandingDelegation: false,
-        responsibleUserId:
-          context?.cause === "company_default"
-            ? null
-            : (context?.responsibleUserId ?? null),
+        responsibleUserId,
         issueId:
           typeof run.contextSnapshot?.issueId === "string"
             ? run.contextSnapshot.issueId
@@ -191,12 +191,15 @@ export async function resolveGitHubOperationCredentials(
     .update(runIdentityContexts)
     .set({ github: summary })
     .where(eq(runIdentityContexts.id, context.id));
-  invocations.push(...await resolveProjectGitHostInvocations(db, secrets, run, gate.projectId));
+  invocations.push(...await resolveProjectGitHostInvocations(db, secrets, run, gate.projectId, responsibleUserId));
+  const identity = summary.status !== "available"
+    ? await resolveAgentCommitIdentity(db, gate.agentName, responsibleUserId)
+    : null;
   return {
     identityContextId: context.id,
     revision: context.revision,
     ...summary,
-    env: combineGitAuthEnv(invocations),
+    env: { ...combineGitAuthEnv(invocations), ...identity },
   };
 }
 
@@ -206,6 +209,7 @@ async function resolveProjectGitHostInvocations(
   secrets: ReturnType<typeof secretService>,
   run: typeof heartbeatRuns.$inferSelect,
   projectId: string | null,
+  responsibleUserId: string | null,
 ): Promise<GitAuthInvocation[]> {
   if (!projectId) return [];
   try {
@@ -215,10 +219,24 @@ async function resolveProjectGitHostInvocations(
       .where(and(eq(projectWorkspaces.projectId, projectId), eq(projectWorkspaces.companyId, run.companyId)));
     const hosts = new Set(rows.map((row) => row.repoUrl && gitHostOfHttpsRemoteUrl(row.repoUrl)).filter((host): host is string => !!host));
     const issueId = run.contextSnapshot?.issueId;
-    const context = { agentId: run.agentId, heartbeatRunId: run.id, issueId: typeof issueId === "string" ? issueId : null };
-    const invocations = await Promise.all([...hosts].map((host) => resolveGitHostInvocation(secrets, run.companyId, host, context)));
+    const context = { agentId: run.agentId, heartbeatRunId: run.id, issueId: typeof issueId === "string" ? issueId : null, responsibleUserId };
+    const invocations = await Promise.all([...hosts].map((host) => resolveGitHostInvocation(secrets, run.companyId, host, context, responsibleUserId)));
     return invocations.filter((invocation) => invocation !== null);
   } catch {
     return [];
+  }
+}
+
+async function resolveAgentCommitIdentity(
+  db: Db,
+  agentName: string | null,
+  responsibleUserId: string | null,
+): Promise<Record<string, string> | null> {
+  if (!agentName || !responsibleUserId) return null;
+  try {
+    const [user] = await db.select({ email: authUsers.email }).from(authUsers).where(eq(authUsers.id, responsibleUserId)).limit(1);
+    return user ? gitAgentIdentityEnv(agentName, user.email) : null;
+  } catch {
+    return null;
   }
 }

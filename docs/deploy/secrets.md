@@ -65,6 +65,13 @@ Other HTTPS git hosts (Forgejo, GitLab, GHES) use a company secret named
 clones and base-ref refreshes, and agent runs receive it through the managed
 `git`/`gh` launchers for their project's workspace hosts.
 
+A user-secret definition with the same key lets each person push with their
+own token: a run uses the responsible user's `GIT_TOKEN_<HOST>` value when they
+stored one and the company secret otherwise. Commits an agent makes on such a
+host are authored as the agent under that person's plus-tagged address
+(`Obsidian Engineer <jane+obsidian-engineer@example.com>`), so blame shows the
+agent and the host can still link the commit to its owner.
+
 ## User-Specific Secrets
 
 User-specific secrets let a shared agent or project declare a slot such as

@@ -61,9 +61,23 @@ export function gitHostTokenSecretName(host: string): string {
   return `GIT_TOKEN_${gitHostKey(host)}`;
 }
 
+/**
+ * Commit identity for an agent working on behalf of a person: the agent's name, under the
+ * person's address with a plus tag, so blame shows the agent and the host can still link the
+ * commit to its owner.
+ */
+export function gitAgentIdentityEnv(agentName: string, ownerEmail: string): Record<string, string> | null {
+  const at = ownerEmail.lastIndexOf("@");
+  const name = agentName.trim();
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  if (at <= 0 || !slug) return null;
+  const email = `${ownerEmail.slice(0, at)}+${slug}${ownerEmail.slice(at)}`;
+  return { GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_NAME: name, GIT_COMMITTER_EMAIL: email };
+}
+
 export type GitCredential = {
   token: string;
-  source: "managed_connection" | "company_secret" | "server_env";
+  source: "managed_connection" | "company_secret" | "user_secret" | "server_env";
   /** The company-secret name the token came from; null for a server-environment token. */
   secretName: string | null;
   githubIdentity?: { userId: string; login: string };
@@ -256,7 +270,7 @@ export function describeGitAuthFailure(input: {
   }
   if (input.used) {
     const label = input.used.secretName
-      ? `the ${input.used.secretName} company-secret ${input.used.secretName.startsWith("GIT_TOKEN_") ? "" : "GitHub "}credential`
+      ? `the ${input.used.secretName} ${input.used.source === "user_secret" ? "user" : "company"}-secret ${input.used.secretName.startsWith("GIT_TOKEN_") ? "" : "GitHub "}credential`
       : input.used.source === "managed_connection"
         ? "the resolved GitHub connection"
       : "the server-environment GitHub credential";
@@ -283,6 +297,18 @@ type GitCredentialContext = {
   agentId?: string | null;
 };
 
+function gitCredentialAccessContext(context?: GitCredentialContext) {
+  return {
+    consumerType: "system" as const,
+    consumerId: "workspace-git-credential",
+    actorType: "system" as const,
+    actorId: context?.agentId ?? undefined,
+    issueId: context?.issueId ?? null,
+    heartbeatRunId: context?.heartbeatRunId ?? null,
+    responsibleUserId: context?.responsibleUserId ?? null,
+  };
+}
+
 // A resolution failure (inactive secret, provider outage) records its own failure audit
 // event; callers fall through to the next source instead of failing the whole git operation.
 async function resolveCompanySecretToken(
@@ -294,28 +320,44 @@ async function resolveCompanySecretToken(
   const secret = await Promise.resolve(secrets.getByName(companyId, secretName)).catch(() => null);
   if (!secret) return "";
   return secrets
-    .resolveSecretValue(companyId, secret.id, "latest", {
-      accessContext: {
-        consumerType: "system",
-        consumerId: "workspace-git-credential",
-        actorType: "system",
-        issueId: context?.issueId ?? null,
-        heartbeatRunId: context?.heartbeatRunId ?? null,
-        responsibleUserId: context?.responsibleUserId ?? null,
-      },
-    })
+    .resolveSecretValue(companyId, secret.id, "latest", { accessContext: gitCredentialAccessContext(context) })
     .then((value) => value.trim())
     .catch(() => "");
 }
 
-/** The company secret `GIT_TOKEN_<HOST>` for one https host outside github.com, when stored. */
+async function resolveUserSecretToken(
+  secrets: GitCredentialSecretsDeps,
+  companyId: string,
+  secretName: string,
+  userId: string,
+  context?: GitCredentialContext,
+): Promise<string> {
+  if (!secrets.resolveUserSecretValue) return "";
+  return secrets
+    .resolveUserSecretValue(
+      companyId,
+      { definitionKey: secretName, responsibleUserId: userId, required: false },
+      gitCredentialAccessContext(context),
+    )
+    .then((resolved) => resolved?.value.trim() ?? "")
+    .catch(() => "");
+}
+
+/**
+ * The token for one https host outside github.com: `tokenOwnerUserId`'s own `GIT_TOKEN_<HOST>`
+ * user secret when stored, else the company secret of that name. Only the run broker names an
+ * owner; the server's own clones and fetches act for the company.
+ */
 export async function resolveGitHostInvocation(
   secrets: GitCredentialSecretsDeps,
   companyId: string,
   host: string,
   context?: GitCredentialContext,
+  tokenOwnerUserId: string | null = null,
 ): Promise<GitAuthInvocation | null> {
   const secretName = gitHostTokenSecretName(host);
+  const userToken = tokenOwnerUserId ? await resolveUserSecretToken(secrets, companyId, secretName, tokenOwnerUserId, context) : "";
+  if (userToken) return { ...buildGitHostAuthInvocation(host, userToken, secretName), source: "user_secret" };
   const token = await resolveCompanySecretToken(secrets, companyId, secretName, context);
   return token ? buildGitHostAuthInvocation(host, token, secretName) : null;
 }
@@ -623,15 +665,7 @@ export async function resolveManagedGitHubCredential(
     if (github.installationCount < 1 || github.repositoryCount < 1) {
       return { configured: true, identitySource: selection.identitySource, error: "The managed GitHub identity no longer has repository access" };
     }
-    const accessContext = {
-      consumerType: "system" as const,
-      consumerId: "workspace-git-credential",
-      actorType: "system" as const,
-      actorId: context.agentId ?? undefined,
-      issueId: context.issueId ?? null,
-      heartbeatRunId: context.heartbeatRunId ?? null,
-      responsibleUserId: context.responsibleUserId ?? null,
-    };
+    const accessContext = gitCredentialAccessContext(context);
     let token: string;
     if (grant.kind === "user") {
       if (!grant.subjectUserId || !secrets.resolveUserSecretValue) {
