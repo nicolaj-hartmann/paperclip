@@ -659,5 +659,6 @@ export function resolvePluginExecuteRpcTimeoutMs(input: {
       baseMs = Math.trunc(configTimeoutMs);
     }
   }
-  return baseMs != null ? baseMs + RPC_OVERHEAD_BUFFER_MS : undefined;
+  const readyMs = typeof input.config.podReadyTimeoutSec === "number" ? input.config.podReadyTimeoutSec * 1000 : 0;
+  return baseMs != null ? baseMs + readyMs + RPC_OVERHEAD_BUFFER_MS : undefined;
 }

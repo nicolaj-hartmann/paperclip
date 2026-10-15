@@ -74,7 +74,7 @@ Common optional fields:
 | `serviceAccountAnnotations` | `{}` | Annotations applied to per-tenant ServiceAccount (e.g. IRSA `eks.amazonaws.com/role-arn`). |
 | `jobTtlSecondsAfterFinished` | `900` | Seconds after a Job completes before garbage-collection. |
 | `podActivityDeadlineSec` | `3600` | Hard ceiling on a single run's wall-clock time. |
-| `podReadyTimeoutSec` | `300` | How long a fresh sandbox pod may take to become Ready, including the image pull. |
+| `podReadyTimeoutSec` | `300` | How long a fresh sandbox pod may take to become Ready, including the image pull; the server allows an `environmentExecute` call this much longer than the command itself. |
 
 Full JSON Schema in `src/manifest.ts`.
 
