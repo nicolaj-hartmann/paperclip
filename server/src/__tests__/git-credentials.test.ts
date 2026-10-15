@@ -8,8 +8,12 @@ import {
   DEFAULT_GITHUB_TOKEN_SECRET_NAMES,
   GIT_CREDENTIAL_TOKEN_ENV_KEY,
   buildGitAuthInvocation,
+  buildGitHostAuthInvocation,
+  combineGitAuthEnv,
   createGitRemoteAuthProvider,
   describeGitAuthFailure,
+  gitHostOfHttpsRemoteUrl,
+  gitHostTokenSecretName,
   isGitHubHttpsRemoteUrl,
   scrubGitCredentialText,
 } from "../services/git-credentials.ts";
@@ -94,14 +98,28 @@ describe("createGitRemoteAuthProvider", () => {
     expect(invocation?.env.GIT_CONFIG_KEY_3).toBe("url.https://github.com/.insteadOf");
   });
 
-  it("returns null for non-GitHub URLs without touching the secret store", async () => {
+  it("returns null for non-GitHub URLs without a host secret, never offering GitHub tokens", async () => {
     const secrets = buildSecretsFake({ GITHUB_TOKEN: "token" });
     const provider = createGitRemoteAuthProvider(fakeDb, "company-1", undefined, {
       secrets,
-      env: {},
+      env: { GITHUB_TOKEN: "env-token" },
     });
     await expect(provider("https://gitlab.com/example/repo.git")).resolves.toBeNull();
-    expect(secrets.getByName).not.toHaveBeenCalled();
+    expect(secrets.getByName.mock.calls.map((call) => call[1])).toEqual(["GIT_TOKEN_GITLAB_COM"]);
+  });
+
+  it("authenticates another https host with its GIT_TOKEN_<HOST> secret, memoized per host", async () => {
+    const secrets = buildSecretsFake({ GITHUB_TOKEN: "gh-token", GIT_TOKEN_CODE_EXAMPLE_COM: "forge-token" });
+    const provider = createGitRemoteAuthProvider(fakeDb, "company-1", undefined, { secrets, env: {} });
+    const invocation = await provider("https://code.example.com/org/repo.git");
+    await provider("https://code.example.com/org/other.git");
+    expect(invocation?.source).toBe("company_secret");
+    expect(invocation?.secretName).toBe("GIT_TOKEN_CODE_EXAMPLE_COM");
+    expect(invocation?.env.PAPERCLIP_GIT_TOKEN_CODE_EXAMPLE_COM).toBe("forge-token");
+    expect(invocation?.env.GH_TOKEN).toBeUndefined();
+    expect(invocation?.env.GIT_CONFIG_KEY_1).toBe("credential.https://code.example.com.helper");
+    expect(invocation?.configArgs.join(" ")).not.toContain("forge-token");
+    expect(secrets.getByName).toHaveBeenCalledTimes(1);
   });
 
   it("memoizes the credential lookup across calls", async () => {
@@ -185,6 +203,31 @@ describe("createGitRemoteAuthProvider", () => {
   });
 });
 
+describe("git host secrets", () => {
+  it("names the secret after the host", () => {
+    expect(gitHostTokenSecretName("code.core.ci")).toBe("GIT_TOKEN_CODE_CORE_CI");
+    expect(gitHostTokenSecretName("Git.Example-Host.com")).toBe("GIT_TOKEN_GIT_EXAMPLE_HOST_COM");
+    expect(() => gitHostTokenSecretName("evil;host")).toThrow();
+  });
+
+  it("recognises only credential-free https remotes outside github.com", () => {
+    expect(gitHostOfHttpsRemoteUrl("https://code.example.com/org/repo.git")).toBe("code.example.com");
+    expect(gitHostOfHttpsRemoteUrl("https://github.com/org/repo.git")).toBeNull();
+    expect(gitHostOfHttpsRemoteUrl("https://code.example.com:8443/org/repo.git")).toBeNull();
+    expect(gitHostOfHttpsRemoteUrl("https://user:pw@code.example.com/org/repo.git")).toBeNull();
+    expect(gitHostOfHttpsRemoteUrl("http://code.example.com/org/repo.git")).toBeNull();
+    expect(gitHostOfHttpsRemoteUrl("git@code.example.com:org/repo.git")).toBeNull();
+  });
+
+  it("keeps exactly one credential.helper reset when combining invocations", () => {
+    const github = buildGitAuthInvocation({ token: "gh", source: "company_secret", secretName: "GITHUB_TOKEN" });
+    const env = combineGitAuthEnv([github, buildGitHostAuthInvocation("code.example.com", "forge", "GIT_TOKEN_CODE_EXAMPLE_COM")]);
+    expect(env.GIT_CONFIG_KEY_0).toBe("credential.helper");
+    expect(Object.entries(env).filter(([key, value]) => key.startsWith("GIT_CONFIG_VALUE_") && value === "")).toHaveLength(1);
+    expect(combineGitAuthEnv([])).toEqual({});
+  });
+});
+
 describe("buildGitAuthInvocation", () => {
   it("keeps the token out of argv and installs the helper URL-scoped to github.com", () => {
     const invocation = buildGitAuthInvocation({
@@ -225,14 +268,15 @@ describe("buildGitAuthInvocation", () => {
 });
 
 describe("credential helper execution (real git, no network)", () => {
-  async function runCredentialFill(description: string) {
+  function invocationFor(host?: string) {
+    return host
+      ? buildGitHostAuthInvocation(host, `token-for-${host}`, gitHostTokenSecretName(host))
+      : buildGitAuthInvocation({ token: "abc123", source: "company_secret", secretName: "GITHUB_TOKEN" });
+  }
+
+  async function runCredentialFill(description: string, invocation: { configArgs: string[]; env: Record<string, string> } = invocationFor()) {
     const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-git-cred-fill-"));
     try {
-      const invocation = buildGitAuthInvocation({
-        token: "abc123",
-        source: "company_secret",
-        secretName: "GITHUB_TOKEN",
-      });
       return await new Promise<{ code: number | null; stdout: string; stderr: string }>(
         (resolve, reject) => {
           const child = spawn("git", [...invocation.configArgs, "credential", "fill"], {
@@ -276,6 +320,27 @@ describe("credential helper execution (real git, no network)", () => {
     const result = await runCredentialFill("protocol=http\nhost=github.com\n\n");
     expect(result.code).not.toBe(0);
     expect(result.stdout).not.toContain("abc123");
+  });
+
+  it("answers only its own host for a GIT_TOKEN_<HOST> credential", async () => {
+    const host = invocationFor("code.example.com");
+    const own = await runCredentialFill("protocol=https\nhost=code.example.com\n\n", host);
+    expect(own.code).toBe(0);
+    expect(own.stdout).toContain("password=token-for-code.example.com");
+    for (const description of ["protocol=https\nhost=github.com\n\n", "protocol=http\nhost=code.example.com\n\n"]) {
+      const other = await runCredentialFill(description, host);
+      expect(other.code).not.toBe(0);
+      expect(other.stdout).not.toContain("token-for-");
+    }
+  });
+
+  it("serves every host from one combined env", async () => {
+    const env = combineGitAuthEnv([invocationFor(), invocationFor("code.example.com"), invocationFor("git.example.org")]);
+    for (const [host, password] of [["github.com", "abc123"], ["code.example.com", "token-for-code.example.com"], ["git.example.org", "token-for-git.example.org"]]) {
+      const result = await runCredentialFill(`protocol=https\nhost=${host}\n\n`, { configArgs: [], env });
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain(`password=${password}`);
+    }
   });
 });
 

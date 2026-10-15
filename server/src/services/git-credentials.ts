@@ -33,16 +33,33 @@ export const GIT_CREDENTIAL_TOKEN_ENV_KEY = "PAPERCLIP_GIT_TOKEN";
 
 // `!`-prefixed helpers run via `sh -c` with the credential action appended as "$1". Only the
 // `get` action answers; store/erase drain stdin and exit 0 silently. `x-access-token`
-// authenticates classic PATs, fine-grained PATs, and GitHub App installation tokens alike.
+// authenticates classic PATs, fine-grained PATs, and GitHub App installation tokens alike;
+// Forgejo, Gitea and GitLab accept any username with a token password.
 //
 // The helper re-validates the credential request from its stdin description and answers only
-// for `protocol=https` + `host=github.com`/`www.github.com`. The pre-invocation URL check
-// runs before git applies configuration like repository-local `url.<base>.insteadOf`
-// rewrites, so a rewritten remote could otherwise request the token for an arbitrary host.
-// The helper is additionally installed URL-scoped (`credential.https://github.com.helper`)
-// so git does not consult it for other hosts in the first place — two independent gates.
-const GIT_CREDENTIAL_HELPER =
-  `!f() { ok=; proto=; while IFS= read -r l && [ -n "$l" ]; do case "$l" in host=github.com|host=www.github.com) ok=1;; protocol=https) proto=1;; esac; done; if [ "$1" = get ] && [ -n "$ok" ] && [ -n "$proto" ]; then printf 'username=x-access-token\\npassword=%s\\n' "$PAPERCLIP_GIT_TOKEN"; fi; }; f`;
+// for `protocol=https` + the host it was built for. The pre-invocation URL check runs before
+// git applies configuration like repository-local `url.<base>.insteadOf` rewrites, so a
+// rewritten remote could otherwise request the token for an arbitrary host. The helper is
+// additionally installed URL-scoped (`credential.https://<host>.helper`) so git does not
+// consult it for other hosts in the first place — two independent gates.
+function gitCredentialHelper(hosts: readonly string[], tokenEnvKey: string): string {
+  const hostPattern = hosts.map((host) => `host=${host}`).join("|");
+  return `!f() { ok=; proto=; while IFS= read -r l && [ -n "$l" ]; do case "$l" in ${hostPattern}) ok=1;; protocol=https) proto=1;; esac; done; if [ "$1" = get ] && [ -n "$ok" ] && [ -n "$proto" ]; then printf 'username=x-access-token\\npassword=%s\\n' "$${tokenEnvKey}"; fi; }; f`;
+}
+
+const GIT_CREDENTIAL_HELPER = gitCredentialHelper(["github.com", "www.github.com"], GIT_CREDENTIAL_TOKEN_ENV_KEY);
+
+const GIT_HOST_PATTERN = /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/;
+
+function gitHostKey(host: string): string {
+  const normalized = host.toLowerCase();
+  if (!GIT_HOST_PATTERN.test(normalized)) throw new Error(`Unsupported git host: ${host}`);
+  return normalized.replace(/[^a-z0-9]/g, "_").toUpperCase();
+}
+
+export function gitHostTokenSecretName(host: string): string {
+  return `GIT_TOKEN_${gitHostKey(host)}`;
+}
 
 export type GitCredential = {
   token: string;
@@ -85,6 +102,19 @@ export function isGitHubHttpsRemoteUrl(remoteUrl: string): boolean {
   if (parsed.protocol !== "https:") return false;
   if (parsed.username || parsed.password) return false;
   return isGitHubDotCom(parsed.hostname);
+}
+
+/** The host of an `https://` remote outside github.com without inline userinfo, else null. */
+export function gitHostOfHttpsRemoteUrl(remoteUrl: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(remoteUrl);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.port || !parsed.hostname) return null;
+  if (isGitHubDotCom(parsed.hostname) || !GIT_HOST_PATTERN.test(parsed.hostname.toLowerCase())) return null;
+  return parsed.hostname.toLowerCase();
 }
 
 function isSupportedGitHubRemoteUrl(remoteUrl: string): boolean {
@@ -150,15 +180,62 @@ export function buildGitAuthInvocation(credential: GitCredential): GitAuthInvoca
         GIT_COMMITTER_NAME: identity.login,
         GIT_COMMITTER_EMAIL: noreplyEmail!,
       } : {}),
-      GIT_CONFIG_COUNT: String(configEntries.length),
-      ...Object.fromEntries(configEntries.flatMap(([key, value], index) => [
-        [`GIT_CONFIG_KEY_${index}`, key],
-        [`GIT_CONFIG_VALUE_${index}`, value],
-      ])),
+      ...gitConfigEnv(configEntries),
     },
     source: credential.source,
     secretName: credential.secretName,
   };
+}
+
+export function buildGitHostAuthInvocation(host: string, token: string, secretName: string): GitAuthInvocation {
+  const tokenEnvKey = `${GIT_CREDENTIAL_TOKEN_ENV_KEY}_${gitHostKey(host)}`;
+  const helper = gitCredentialHelper([host], tokenEnvKey);
+  const helperKey = `credential.https://${host}.helper`;
+  return {
+    configArgs: ["-c", "credential.helper=", "-c", `${helperKey}=${helper}`],
+    env: {
+      [tokenEnvKey]: token,
+      GIT_TERMINAL_PROMPT: "0",
+      ...gitConfigEnv([["credential.helper", ""], [helperKey, helper]]),
+    },
+    source: "company_secret",
+    secretName,
+  };
+}
+
+function gitConfigEnv(entries: readonly string[][]): Record<string, string> {
+  return {
+    GIT_CONFIG_COUNT: String(entries.length),
+    ...Object.fromEntries(entries.flatMap(([key, value], index) => [
+      [`GIT_CONFIG_KEY_${index}`, key],
+      [`GIT_CONFIG_VALUE_${index}`, value],
+    ])),
+  };
+}
+
+/**
+ * One env carrying several invocations' credentials: the host helpers are URL-scoped, so
+ * they coexist once their `GIT_CONFIG_*` entries are renumbered into a single list.
+ */
+export function combineGitAuthEnv(invocations: readonly GitAuthInvocation[]): Record<string, string> {
+  const env: Record<string, string> = {};
+  const entries: string[][] = [];
+  for (const invocation of invocations) {
+    const count = Number(invocation.env.GIT_CONFIG_COUNT ?? 0);
+    for (const [key, value] of Object.entries(invocation.env)) {
+      if (!/^GIT_CONFIG_(COUNT|(KEY|VALUE)_\d+)$/.test(key)) env[key] = value;
+    }
+    for (let index = 0; index < count; index += 1) {
+      const key = invocation.env[`GIT_CONFIG_KEY_${index}`];
+      const value = invocation.env[`GIT_CONFIG_VALUE_${index}`];
+      if (key === undefined || value === undefined) continue;
+      // Each invocation opens with an empty `credential.helper` that clears every helper
+      // collected before it, so only the first reset may survive the merge.
+      if (key === "credential.helper" && value === "" && entries.length > 0) continue;
+      entries.push([key, value]);
+    }
+  }
+  return entries.length > 0 ? { ...env, ...gitConfigEnv(entries) } : env;
 }
 
 const GIT_AUTH_FAILURE_PATTERN =
@@ -179,13 +256,13 @@ export function describeGitAuthFailure(input: {
   }
   if (input.used) {
     const label = input.used.secretName
-      ? `the ${input.used.secretName} company-secret GitHub credential`
+      ? `the ${input.used.secretName} company-secret ${input.used.secretName.startsWith("GIT_TOKEN_") ? "" : "GitHub "}credential`
       : input.used.source === "managed_connection"
         ? "the resolved GitHub connection"
       : "the server-environment GitHub credential";
     return `The operation authenticated with ${label}, which was rejected or lacks access to this repository.`;
   }
-  return "No GitHub credential is configured — add a GITHUB_TOKEN or GH_TOKEN company secret in Settings → Secrets, or configure a local checkout cwd for this project workspace.";
+  return "No git credential is configured — add a GITHUB_TOKEN or GH_TOKEN company secret for github.com, or GIT_TOKEN_<HOST> for another host, in Settings → Secrets, or configure a local checkout cwd for this project workspace.";
 }
 
 type SecretServiceLike = ReturnType<typeof secretService>;
@@ -199,6 +276,50 @@ type GitCredentialSecretsDeps = {
   resolveUserSecretValue?: SecretServiceLike["resolveUserSecretValue"];
 };
 
+type GitCredentialContext = {
+  issueId?: string | null;
+  heartbeatRunId?: string | null;
+  responsibleUserId?: string | null;
+  agentId?: string | null;
+};
+
+// A resolution failure (inactive secret, provider outage) records its own failure audit
+// event; callers fall through to the next source instead of failing the whole git operation.
+async function resolveCompanySecretToken(
+  secrets: GitCredentialSecretsDeps,
+  companyId: string,
+  secretName: string,
+  context?: GitCredentialContext,
+): Promise<string> {
+  const secret = await Promise.resolve(secrets.getByName(companyId, secretName)).catch(() => null);
+  if (!secret) return "";
+  return secrets
+    .resolveSecretValue(companyId, secret.id, "latest", {
+      accessContext: {
+        consumerType: "system",
+        consumerId: "workspace-git-credential",
+        actorType: "system",
+        issueId: context?.issueId ?? null,
+        heartbeatRunId: context?.heartbeatRunId ?? null,
+        responsibleUserId: context?.responsibleUserId ?? null,
+      },
+    })
+    .then((value) => value.trim())
+    .catch(() => "");
+}
+
+/** The company secret `GIT_TOKEN_<HOST>` for one https host outside github.com, when stored. */
+export async function resolveGitHostInvocation(
+  secrets: GitCredentialSecretsDeps,
+  companyId: string,
+  host: string,
+  context?: GitCredentialContext,
+): Promise<GitAuthInvocation | null> {
+  const secretName = gitHostTokenSecretName(host);
+  const token = await resolveCompanySecretToken(secrets, companyId, secretName, context);
+  return token ? buildGitHostAuthInvocation(host, token, secretName) : null;
+}
+
 /**
  * Build the credential provider for one run. Resolution order: the managed GitHub identity
  * resolver, then a company secret by well-known name, then the server process environment
@@ -210,12 +331,7 @@ type GitCredentialSecretsDeps = {
 export function createGitRemoteAuthProvider(
   db: Db,
   companyId: string,
-  context?: {
-    issueId?: string | null;
-    heartbeatRunId?: string | null;
-    responsibleUserId?: string | null;
-    agentId?: string | null;
-  },
+  context?: GitCredentialContext,
   deps?: {
     secrets?: GitCredentialSecretsDeps;
     env?: NodeJS.ProcessEnv;
@@ -239,23 +355,7 @@ export function createGitRemoteAuthProvider(
       return managed.credential;
     }
     for (const secretName of secretNames) {
-      const secret = await Promise.resolve(secrets.getByName(companyId, secretName)).catch(() => null);
-      if (!secret) continue;
-      // A resolution failure (inactive secret, provider outage) records its own failure audit
-      // event; fall through to the next source instead of failing the whole git operation here.
-      const token = await secrets
-        .resolveSecretValue(companyId, secret.id, "latest", {
-          accessContext: {
-            consumerType: "system",
-            consumerId: "workspace-git-credential",
-            actorType: "system",
-            issueId: context?.issueId ?? null,
-            heartbeatRunId: context?.heartbeatRunId ?? null,
-            responsibleUserId: context?.responsibleUserId ?? null,
-          },
-        })
-        .then((value) => value.trim())
-        .catch(() => "");
+      const token = await resolveCompanySecretToken(secrets, companyId, secretName, context);
       if (token) return { token, source: "company_secret", secretName };
     }
     const envToken = env.GITHUB_TOKEN?.trim() || env.GH_TOKEN?.trim() || "";
@@ -263,28 +363,40 @@ export function createGitRemoteAuthProvider(
     return null;
   };
 
+  const hostInvocations = new Map<string, Promise<GitAuthInvocation | null>>();
+
+  // A run with an identity context takes its credentials from the broker, which applies the
+  // run's trust policy; the result is also the gate for host tokens.
+  const brokeredRunCredentials = async () => {
+    if (!db || !context?.heartbeatRunId || !context.agentId) return null;
+    const [run] = await db.select({ contextId: heartbeatRuns.activeIdentityContextId }).from(heartbeatRuns).where(and(
+      eq(heartbeatRuns.id, context.heartbeatRunId), eq(heartbeatRuns.companyId, companyId), eq(heartbeatRuns.agentId, context.agentId),
+    ));
+    if (!run?.contextId) return null;
+    const { resolveGitHubOperationCredentials } = await import("./github-operation-credentials.js");
+    return resolveGitHubOperationCredentials(db, { companyId, runId: context.heartbeatRunId, agentId: context.agentId });
+  };
+
   return async (remoteUrl: string) => {
-    if (!isSupportedGitHubRemoteUrl(remoteUrl)) return null;
-    if (db && context?.heartbeatRunId && context.agentId) {
-      const [run] = await db.select({ contextId: heartbeatRuns.activeIdentityContextId }).from(heartbeatRuns).where(and(
-        eq(heartbeatRuns.id, context.heartbeatRunId), eq(heartbeatRuns.companyId, companyId), eq(heartbeatRuns.agentId, context.agentId),
-      ));
-      if (run?.contextId) {
-        const { resolveGitHubOperationCredentials } = await import("./github-operation-credentials.js");
-        const result = await resolveGitHubOperationCredentials(db, {
-          companyId, runId: context.heartbeatRunId, agentId: context.agentId,
-        });
-        if (result.status === "absent") {
-          const credential = await resolveCredential();
-          return credential ? buildGitAuthInvocation(credential) : null;
-        }
-        const anonymous = buildGitAuthInvocation({ token: "", source: "managed_connection", secretName: null });
-        return { ...anonymous, env: {
-          ...anonymous.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null",
-          GIT_AUTHOR_NAME: "", GIT_AUTHOR_EMAIL: "", GIT_COMMITTER_NAME: "", GIT_COMMITTER_EMAIL: "",
-          ...result.env,
-        } };
+    const host = gitHostOfHttpsRemoteUrl(remoteUrl);
+    if (!host && !isSupportedGitHubRemoteUrl(remoteUrl)) return null;
+    const brokered = await brokeredRunCredentials();
+    if (host) {
+      if (brokered?.status === "unavailable") return null;
+      let pending = hostInvocations.get(host);
+      if (!pending) {
+        pending = resolveGitHostInvocation(secrets, companyId, host, context);
+        hostInvocations.set(host, pending);
       }
+      return pending;
+    }
+    if (brokered && brokered.status !== "absent") {
+      const anonymous = buildGitAuthInvocation({ token: "", source: "managed_connection", secretName: null });
+      return { ...anonymous, env: {
+        ...anonymous.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null",
+        GIT_AUTHOR_NAME: "", GIT_AUTHOR_EMAIL: "", GIT_COMMITTER_NAME: "", GIT_COMMITTER_EMAIL: "",
+        ...brokered.env,
+      } };
     }
     credentialPromise ??= resolveCredential();
     const credential = await credentialPromise;

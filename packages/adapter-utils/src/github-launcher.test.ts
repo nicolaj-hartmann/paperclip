@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
@@ -62,6 +62,38 @@ describe("managed GitHub launchers", () => {
       GH_CONFIG_DIR: configRoot, PATH: `${bin}:${process.env.PATH}`,
     } });
   }, 15_000); // broker-offline retries the transport twice per command before it falls back
+
+  it("applies host tokens the broker returns even without a usable GitHub identity, after its own config", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "paperclip-github-host-token-"));
+    cleanups.push(() => rm(root, { recursive: true, force: true }));
+    const bin = path.join(root, "managed");
+    await mkdir(bin);
+    await writeFile(path.join(bin, "git"), githubLauncherSource(), { mode: 0o700 });
+    const server = createServer((_req, res) => {
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ status: "unavailable", reason: "No GitHub identity", env: {
+        PAPERCLIP_GIT_TOKEN_CODE_EXAMPLE_COM: "forge-token",
+        GIT_CONFIG_COUNT: "2", GIT_CONFIG_KEY_0: "credential.helper", GIT_CONFIG_VALUE_0: "",
+        GIT_CONFIG_KEY_1: "credential.https://code.example.com.helper",
+        GIT_CONFIG_VALUE_1: "!f() { if [ \"$1\" = get ]; then echo username=x; echo \"password=$PAPERCLIP_GIT_TOKEN_CODE_EXAMPLE_COM\"; fi; }; f",
+      } }));
+    });
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    cleanups.push(() => new Promise<void>(resolve => server.close(() => resolve())));
+    const { port } = server.address() as { port: number };
+    const env: NodeJS.ProcessEnv = { ...process.env, ...githubBrokerEnvironment({ PAPERCLIP_GIT_TOKEN_CODE_EXAMPLE_COM: "host-must-not-leak" }, { url: `http://127.0.0.1:${port}`, token: "run-capability" }), PATH: `${bin}:${process.env.PATH}` };
+    expect(env.PAPERCLIP_GIT_TOKEN_CODE_EXAMPLE_COM).toBe("");
+    const result = await new Promise<{ code: number | null; stdout: string }>((resolve) => {
+      const child = spawn(path.join(bin, "git"), ["credential", "fill"], { cwd: root, env });
+      let stdout = "";
+      child.stdout.on("data", (chunk) => { stdout += String(chunk); });
+      child.on("close", (code) => resolve({ code, stdout }));
+      child.stdin.end("protocol=https\nhost=code.example.com\n\n");
+    });
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("password=forge-token");
+    expect((await exec(path.join(bin, "git"), ["config", "--get", "user.useConfigOnly"], { cwd: root, env })).stdout.trim()).toBe("true");
+  });
 
   it("explains unavailable access while allowing local work without credentials", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "paperclip-github-diagnostic-"));

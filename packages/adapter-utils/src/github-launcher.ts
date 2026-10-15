@@ -34,7 +34,7 @@ async function main() {
   } catch { diagnostic('configuration_directory_unavailable'); }
   {
     for (const key of Object.keys(env)) {
-      if (/^(GH_TOKEN|GITHUB_TOKEN|GH_ENTERPRISE_TOKEN|GITHUB_ENTERPRISE_TOKEN|PAPERCLIP_GIT_TOKEN|GIT_AUTHOR_.*|GIT_COMMITTER_.*|GIT_CONFIG_.*|GIT_ASKPASS|SSH_ASKPASS|SSH_AUTH_SOCK|GIT_SSH.*)$/.test(key)) delete env[key];
+      if (/^(GH_TOKEN|GITHUB_TOKEN|GH_ENTERPRISE_TOKEN|GITHUB_ENTERPRISE_TOKEN|PAPERCLIP_GIT_TOKEN(_[A-Z0-9_]+)?|GIT_AUTHOR_.*|GIT_COMMITTER_.*|GIT_CONFIG_.*|GIT_ASKPASS|SSH_ASKPASS|SSH_AUTH_SOCK|GIT_SSH.*)$/.test(key)) delete env[key];
     }
     Object.assign(env, {
       GH_CONFIG_DIR: configDirectory, SSH_AUTH_SOCK: '',
@@ -90,10 +90,21 @@ async function main() {
           : 'Check the GitHub connection in Paperclip';
         process.stderr.write('Paperclip: GitHub access unavailable: ' + reason + '. Continuing without GitHub credentials.\n');
       }
-      if (result.status === 'available' && configReady) {
+      // Host tokens and config arrive whatever the GitHub status; GitHub identity only when
+      // it is available. Brokered config entries follow the launcher's own, so its identity
+      // and askpass settings survive whatever the broker adds.
+      if (configReady) {
+        const base = Number(env.GIT_CONFIG_COUNT) || 0;
+        let added = 0;
         for (const [key, value] of Object.entries(result.env || {})) {
-          if (/^(GH_TOKEN|GITHUB_TOKEN|PAPERCLIP_GIT_TOKEN|GIT_TERMINAL_PROMPT|GIT_AUTHOR_(NAME|EMAIL)|GIT_COMMITTER_(NAME|EMAIL)|GIT_CONFIG_COUNT|GIT_CONFIG_(KEY|VALUE)_\d+)$/.test(key) && typeof value === 'string') env[key] = value;
+          if (typeof value !== 'string') continue;
+          const entry = /^GIT_CONFIG_(KEY|VALUE)_(\d+)$/.exec(key);
+          if (entry) env['GIT_CONFIG_' + entry[1] + '_' + (base + Number(entry[2]))] = value;
+          else if (key === 'GIT_CONFIG_COUNT') added = Number(value) || 0;
+          else if (/^(PAPERCLIP_GIT_TOKEN_[A-Z0-9_]+|GIT_TERMINAL_PROMPT)$/.test(key)) env[key] = value;
+          else if (result.status === 'available' && /^(GH_TOKEN|GITHUB_TOKEN|PAPERCLIP_GIT_TOKEN|GIT_AUTHOR_(NAME|EMAIL)|GIT_COMMITTER_(NAME|EMAIL))$/.test(key)) env[key] = value;
         }
+        env.GIT_CONFIG_COUNT = String(base + added);
       }
       }
     } else { diagnostic('capability_missing'); }
@@ -120,9 +131,9 @@ main().catch(() => { process.stderr.write('Paperclip: GitHub launcher_setup_fail
 export function githubBrokerEnvironment(input: Record<string, unknown>, broker: { url: string; token: string }): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(input)) if (typeof value === "string") env[key] = value;
-  for (const key of ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "PAPERCLIP_GIT_TOKEN", "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "GIT_CONFIG_COUNT", "PAPERCLIP_GITHUB_OPERATION_ACTIVE"]) env[key] = "";
+  for (const key of ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "GIT_CONFIG_COUNT", "PAPERCLIP_GITHUB_OPERATION_ACTIVE"]) env[key] = "";
   for (const key of Object.keys(env)) {
-    if (/^GIT_CONFIG_(KEY|VALUE)_\d+$/.test(key)) env[key] = "";
+    if (/^(GIT_CONFIG_(KEY|VALUE)_\d+|PAPERCLIP_GIT_TOKEN(_[A-Z0-9_]+)?)$/.test(key)) env[key] = "";
   }
   env.GIT_CONFIG_GLOBAL = "/dev/null";
   env.GIT_CONFIG_SYSTEM = "/dev/null";

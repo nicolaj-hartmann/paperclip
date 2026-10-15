@@ -58,6 +58,13 @@ GitHub repos for repo-only project workspaces and refreshing worktree base
 refs. See
 [Execution workspaces](../guides/board-operator/execution-workspaces-and-runtime-services.md#private-repositories-and-repo-only-project-workspaces).
 
+Other HTTPS git hosts (Forgejo, GitLab, GHES) use a company secret named
+`GIT_TOKEN_<HOST>`, the hostname upper-cased with `.` and `-` replaced by `_`:
+`GIT_TOKEN_CODE_EXAMPLE_COM` for `code.example.com` (hosts that differ only in
+`.` versus `-` share one name). The server uses it for
+clones and base-ref refreshes, and agent runs receive it through the managed
+`git`/`gh` launchers for their project's workspace hosts.
+
 ## User-Specific Secrets
 
 User-specific secrets let a shared agent or project declare a slot such as

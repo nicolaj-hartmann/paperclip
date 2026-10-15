@@ -18,6 +18,7 @@ import {
   issueComments,
   issues,
   projects,
+  projectWorkspaces,
   runIdentityContexts,
   toolApplications,
   toolConnectionInstalls,
@@ -47,6 +48,7 @@ const vault = vi.hoisted(() => ({
     }),
   ),
   resolveSecretValue: vi.fn(async () => "test-dedicated-token"),
+  getByName: vi.fn(async (_company: string, _name: string): Promise<{ id: string } | null> => null),
 }));
 vi.mock("../services/secrets.js", () => ({ secretService: () => vault }));
 const support = await getEmbeddedPostgresTestSupport();
@@ -593,6 +595,27 @@ const support = await getEmbeddedPostgresTestSupport();
         source: "dedicated",
         env: {},
       });
+    });
+    it("serves GIT_TOKEN_<HOST> secrets for the project's non-GitHub remotes", async () => {
+      const input = await seed();
+      const projectId = randomUUID();
+      await db.insert(projects).values({ id: projectId, companyId: input.companyId, name: "Forge" });
+      await db.insert(projectWorkspaces).values([
+        { companyId: input.companyId, projectId, name: "repo", sourceType: "remote_repo", repoUrl: "https://code.example.com/org/repo.git" },
+        { companyId: input.companyId, projectId, name: "github", sourceType: "remote_repo", repoUrl: "https://github.com/org/repo.git" },
+      ]);
+      await db.update(issues).set({ projectId }).where(eq(issues.id, input.issueId));
+      vault.getByName.mockImplementation(async (_company, name) => name === "GIT_TOKEN_CODE_EXAMPLE_COM" ? { id: "secret-host" } : null);
+      try {
+        const result = await resolveGitHubOperationCredentials(db, input);
+        expect(result.status).toBe("absent");
+        expect(result.env.PAPERCLIP_GIT_TOKEN_CODE_EXAMPLE_COM).toBe("test-dedicated-token");
+        expect(result.env.GH_TOKEN).toBeUndefined();
+        expect(result.env.GIT_CONFIG_KEY_1).toBe("credential.https://code.example.com.helper");
+        expect(vault.getByName.mock.calls.map((call) => call[1])).toEqual(["GIT_TOKEN_CODE_EXAMPLE_COM"]);
+      } finally {
+        vault.getByName.mockImplementation(async () => null);
+      }
     });
     it("does not resolve the company default person's GitHub", async () => {
       const input = await seed();

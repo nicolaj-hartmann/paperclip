@@ -41,7 +41,8 @@ const credentials = vi.hoisted(() => ({
 vi.mock("../services/secrets.js", () => ({
   secretService: credentials.secretService,
 }));
-vi.mock("../services/git-credentials.js", () => ({
+vi.mock("../services/git-credentials.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../services/git-credentials.js")>(),
   resolveManagedGitHubCredential: credentials.resolveManagedGitHubCredential,
   buildGitAuthInvocation: () => ({ env: { GH_TOKEN: "test-export-sentinel" } }),
 }));
