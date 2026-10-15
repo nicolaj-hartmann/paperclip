@@ -93,7 +93,6 @@ export function buildSandboxCrManifest(
             {
               name: "agent",
               image: input.image,
-              imagePullPolicy: "IfNotPresent",
               // sleep infinity keeps the pod running; paperclip-server execs
               // commands into it via Kubernetes exec API. Tini as PID 1 for
               // proper signal forwarding and zombie reaping. The repo dir is

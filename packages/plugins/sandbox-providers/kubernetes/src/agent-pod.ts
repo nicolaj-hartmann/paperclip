@@ -10,7 +10,6 @@ export function buildSidecars(services: SidecarService[]): Record<string, unknow
     return {
       name: service.name,
       image: service.image,
-      imagePullPolicy: "IfNotPresent",
       restartPolicy: "Always",
       ...(service.command ? { command: service.command } : {}),
       ...(service.args ? { args: service.args } : {}),
