@@ -1,4 +1,5 @@
 import type { KubeClients } from "./kube-client.js";
+import type { KubernetesProviderConfig } from "./types.js";
 import { CACHE_VOLUME_CLAIM } from "./agent-pod.js";
 import { buildNetworkPolicyManifests } from "./network-policy.js";
 import { buildCiliumNetworkPolicyManifest } from "./cilium-network-policy.js";
@@ -11,13 +12,7 @@ export interface EnsureTenantInput {
   egressMode: "standard" | "cilium";
   egressAllowFqdns: string[];
   egressAllowCidrs: string[];
-  resourceQuota: {
-    pods: string;
-    requestsCpu: string;
-    requestsMemory: string;
-    limitsCpu: string;
-    limitsMemory: string;
-  };
+  resourceQuota: KubernetesProviderConfig["resourceQuota"];
   imagePullSecrets: string[];
   cacheVolumeSize?: string;
 }

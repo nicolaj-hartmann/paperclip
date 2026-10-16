@@ -64,16 +64,6 @@ const PAPERCLIP_SERVER_NAMESPACE = "paperclip";
 // Name of the ServiceAccount created inside each tenant namespace by ensureTenant.
 const TENANT_SERVICE_ACCOUNT = "paperclip-tenant-sa";
 
-// Resource quota defaults applied to every tenant namespace (tunable via
-// config in a future iteration).
-const DEFAULT_RESOURCE_QUOTA = {
-  pods: "20",
-  requestsCpu: "10",
-  requestsMemory: "20Gi",
-  limitsCpu: "20",
-  limitsMemory: "40Gi",
-};
-
 function deriveTenantNamespace(config: KubernetesProviderConfig, companyId: string): string {
   // TODO: future versions could thread companyName through AcquireLeaseParams
   // to get a friendlier slug (e.g. "acme-corp") instead of the UUID-derived one.
@@ -352,7 +342,7 @@ const plugin = definePlugin({
       egressMode: config.egressMode,
       egressAllowFqdns: [...adapterDefaults.allowFqdns, ...config.egressAllowFqdns],
       egressAllowCidrs: config.egressAllowCidrs,
-      resourceQuota: DEFAULT_RESOURCE_QUOTA,
+      resourceQuota: config.resourceQuota,
       imagePullSecrets: config.imagePullSecrets,
       cacheVolumeSize: config.cacheVolumeSize,
     });

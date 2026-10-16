@@ -25,6 +25,11 @@ describe("kubernetesProviderConfigSchema", () => {
     );
   });
 
+  it("defaults the tenant resource quota and merges overrides", () => {
+    expect(parseKubernetesProviderConfig({ inCluster: true }).resourceQuota).toEqual({ pods: "20", requestsCpu: "10", requestsMemory: "20Gi", limitsCpu: "20", limitsMemory: "40Gi" });
+    expect(parseKubernetesProviderConfig({ inCluster: true, resourceQuota: { pods: "40", limitsMemory: "80Gi" } }).resourceQuota).toMatchObject({ pods: "40", limitsMemory: "80Gi", requestsCpu: "10" });
+  });
+
   it("rejects reuseLease on the job backend", () => {
     expect(() => parseKubernetesProviderConfig({ inCluster: true, backend: "job", reuseLease: true })).toThrow(/sandbox-cr/);
     expect(parseKubernetesProviderConfig({ inCluster: true, reuseLease: true }).idleShutdownSec).toBe(600);

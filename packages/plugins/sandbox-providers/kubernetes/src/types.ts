@@ -35,6 +35,15 @@ export const kubernetesProviderConfigSchema = z
     podReadyTimeoutSec: z.number().int().positive().default(300),
 
     cacheVolumeSize: z.string().min(1).optional(),
+    resourceQuota: z
+      .object({
+        pods: z.string().default("20"),
+        requestsCpu: z.string().default("10"),
+        requestsMemory: z.string().default("20Gi"),
+        limitsCpu: z.string().default("20"),
+        limitsMemory: z.string().default("40Gi"),
+      })
+      .default({ pods: "20", requestsCpu: "10", requestsMemory: "20Gi", limitsCpu: "20", limitsMemory: "40Gi" }),
     reuseLease: z.boolean().default(false),
     idleShutdownSec: z.number().int().positive().default(600),
 

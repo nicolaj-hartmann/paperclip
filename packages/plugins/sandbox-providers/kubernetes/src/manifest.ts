@@ -103,6 +103,18 @@ const manifest: PaperclipPluginManifestV1 = {
             minimum: 1,
             description: "How long a fresh sandbox pod may take to become Ready, including the image pull (default: 300).",
           },
+          resourceQuota: {
+            type: "object",
+            properties: {
+              pods: { type: "string" },
+              requestsCpu: { type: "string" },
+              requestsMemory: { type: "string" },
+              limitsCpu: { type: "string" },
+              limitsMemory: { type: "string" },
+            },
+            description:
+              "ResourceQuota for the tenant namespace (defaults: 20 pods, 10 CPU / 20Gi requests, 20 CPU / 40Gi limits). Applied when the namespace is first provisioned; delete the `paperclip-quota` ResourceQuota to re-apply a change.",
+          },
           cacheVolumeSize: {
             type: "string",
             description:
