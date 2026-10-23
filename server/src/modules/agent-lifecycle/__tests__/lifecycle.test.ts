@@ -144,6 +144,35 @@ const support = await getEmbeddedPostgresTestSupport();
     } finally { probe.mockRestore(); }
   });
 
+  it("backs off failed lifecycle steps and gives up after ten attempts until a retry", async () => {
+    const store = createLifecycleStore(db);
+    const agent = await hire();
+    let now = new Date("2026-01-01T00:00:00Z");
+    const fail = async () => {
+      const claimed = await store.claim(agent.id, "owner", now);
+      expect(claimed).not.toBeNull();
+      await store.defer(claimed!, "owner", "The lifecycle step failed. Retry the operation.", now);
+      return (await current(agent.id)).lifecycleOperation!;
+    };
+    let operation = await fail();
+    expect(operation.failures).toBe(1);
+    expect(Date.parse(operation.retryAt!) - now.getTime()).toBe(60_000);
+    now = new Date(operation.retryAt!);
+    operation = await fail();
+    expect(operation.failures).toBe(2);
+    expect(Date.parse(operation.retryAt!) - now.getTime()).toBe(120_000);
+    for (let failures = 3; failures <= 10; failures++) {
+      now = new Date(operation.retryAt!);
+      operation = await fail();
+    }
+    expect(operation).toMatchObject({ failures: 10, retryAt: "infinity" });
+    expect((await current(agent.id)).lifecycleError).toContain("Gave up after 10 attempts.");
+    expect(await store.pending(10, new Date("2100-01-01T00:00:00Z"))).not.toContain(agent.id);
+    await createAgentLifecycle(db).retry(agent.id);
+    expect(await store.pending(10, now)).toContain(agent.id);
+    expect((await current(agent.id)).lifecycleOperation).not.toHaveProperty("failures");
+  });
+
   it("recovers an expired native owner only after the cancelled run and controller stop", async () => {
     const agent = await hire();
     const [issue] = await db.insert(issues).values({ companyId, title: "Cancelled native run" }).returning();

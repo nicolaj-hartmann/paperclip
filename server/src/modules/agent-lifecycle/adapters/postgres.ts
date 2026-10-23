@@ -6,6 +6,9 @@ import { AgentLifecycleConflict, compatibilityStatus, transition } from "../doma
 import type { LifecycleEffects } from "./effects.js";
 import type { LifecycleStore } from "../application/ports.js";
 
+const MAX_FAILURES = 10;
+const MAX_BACKOFF_MS = 3_600_000;
+
 export function assertRootDatabase(db: Db) {
   if ("nestedIndex" in db) throw new AgentLifecycleConflict("Lifecycle commands require the root database connection");
 }
@@ -29,7 +32,7 @@ export function createLifecycleStore(db: Db, effects: LifecycleEffects): Lifecyc
           transition(agent.lifecycleState, command);
           if (agent.lifecycleOperation?.leaseUntil && Date.parse(agent.lifecycleOperation.leaseUntil) > Date.now()) return agent;
           const [updated] = await tx.update(agents).set({ lifecycleError: null,
-            lifecycleOperation: sql`${agents.lifecycleOperation} - 'retryAt' - 'leaseOwner' - 'leaseUntil'`, updatedAt: new Date() }).where(eq(agents.id, id)).returning();
+            lifecycleOperation: sql`${agents.lifecycleOperation} - 'retryAt' - 'leaseOwner' - 'leaseUntil' - 'failures'`, updatedAt: new Date() }).where(eq(agents.id, id)).returning();
           return updated;
         }
         if (command === "resume" && !["ready", "paused", "pausing", "resuming"].includes(agent.lifecycleState)) transition(agent.lifecycleState, command);
@@ -131,10 +134,15 @@ export function createLifecycleStore(db: Db, effects: LifecycleEffects): Lifecyc
       return rows.length > 0;
     },
     async defer(agent, owner, error, now) {
+      const failures = (agent.lifecycleOperation?.failures ?? 0) + (error ? 1 : 0);
+      const gaveUp = error !== null && failures >= MAX_FAILURES;
+      const retryAt = !error ? new Date(now.getTime() + 2_000).toISOString()
+        : gaveUp ? "infinity"
+        : new Date(now.getTime() + Math.min(60_000 * 2 ** (failures - 1), MAX_BACKOFF_MS)).toISOString();
       const rows = await db.update(agents).set({
-        lifecycleError: error,
+        lifecycleError: gaveUp ? `${error} Gave up after ${failures} attempts.` : error,
         lifecycleOperation: sql`(${agents.lifecycleOperation} - 'leaseOwner' - 'leaseUntil')
-          || jsonb_build_object('retryAt', ${new Date(now.getTime() + (error ? 60_000 : 2_000)).toISOString()}::text)`,
+          || jsonb_build_object('retryAt', ${retryAt}::text, 'failures', ${failures}::int)`,
         updatedAt: now,
       }).where(and(eq(agents.id, agent.id), eq(agents.lifecycleVersion, agent.lifecycleVersion),
         sql`${agents.lifecycleOperation}->>'leaseOwner' = ${owner}`)).returning({ id: agents.id });

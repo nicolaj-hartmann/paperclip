@@ -19,7 +19,7 @@ export async function updateAgentConfiguration(tx: Db, effects: LifecycleEffects
   const [updated] = await tx.update(agents).set({ ...patch, updatedAt: new Date(), ...(invalidate ? {
     lifecycleVersion: current.lifecycleVersion + 1, lifecycleError: null,
     lifecycleOperation: { ...current.lifecycleOperation!, id: randomUUID(), hostComplete: false,
-      completedPluginIds: [], leaseOwner: undefined, leaseUntil: undefined, retryAt: undefined },
+      completedPluginIds: [], leaseOwner: undefined, leaseUntil: undefined, retryAt: undefined, failures: undefined },
   } : {}) }).where(eq(agents.id, id)).returning();
   await effects.completeConfiguration(tx, current, updated, patch, options, publications);
   return agentRecordQueries(tx).getById(id);

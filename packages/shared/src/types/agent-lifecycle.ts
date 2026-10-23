@@ -14,6 +14,7 @@ export interface AgentLifecycleOperation {
   leaseUntil?: string;
   retryAt?: string;
   attempts: number;
+  failures?: number;
   responsibleUserId?: string | null;
 }
 
